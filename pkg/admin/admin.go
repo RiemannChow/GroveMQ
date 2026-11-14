@@ -1,0 +1,1281 @@
+// Copyright 2023 The grovemq Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package admin provides REST API endpoints for GroveMQ broker administration
+// and monitoring. It implements EMQX-compatible management interfaces.
+package admin
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/turtacn/grovemq/pkg/acl"
+	"github.com/turtacn/grovemq/pkg/blacklist"
+	"github.com/turtacn/grovemq/pkg/metrics"
+)
+
+// APIServer provides REST API endpoints for broker management
+type APIServer struct {
+	metricsManager *metrics.MetricsManager
+	broker         BrokerInterface
+
+	// reloadHandler, when set, is invoked by POST /api/v5/reload to re-read and
+	// re-apply configuration without a restart (emqx ctl-style hot reload).
+	// It is kept as a separate callback (rather than a BrokerInterface method)
+	// so the admin/dashboard mock brokers need no change.
+	reloadHandler func() error
+}
+
+// GetBroker returns the underlying broker interface, allowing other surfaces
+// (e.g. the dashboard) to read real broker state without re-implementing the
+// BrokerInterface.
+func (s *APIServer) GetBroker() BrokerInterface {
+	return s.broker
+}
+
+// BrokerInterface defines the interface for broker operations
+type BrokerInterface interface {
+	GetConnections() []ConnectionInfo
+	GetSessions() []SessionInfo
+	GetSubscriptions() []SubscriptionInfo
+	GetRoutes() []RouteInfo
+	DisconnectClient(clientID string) error
+	KickoutSession(clientID string) error
+	GetNodeInfo() NodeInfo
+	GetClusterNodes() []NodeInfo
+	GetBlacklistMiddleware() *blacklist.BlacklistMiddleware
+	GetACLEngine() *acl.Engine
+}
+
+// ConnectionInfo represents client connection information
+type ConnectionInfo struct {
+	ClientID           string            `json:"clientid"`
+	Username           string            `json:"username"`
+	PeerHost           string            `json:"peerhost"`
+	SockPort           int               `json:"sockport"`
+	Protocol           string            `json:"protocol"`
+	ConnectedAt        time.Time         `json:"connected_at"`
+	DisconnectedAt     *time.Time        `json:"disconnected_at,omitempty"`
+	KeepAlive          int               `json:"keepalive"`
+	CleanStart         bool              `json:"clean_start"`
+	ExpiryInterval     int               `json:"expiry_interval"`
+	ProtoVer           int               `json:"proto_ver"`
+	SubscriptionsCount int               `json:"subscriptions_count"`
+	MaxSubscriptions   int               `json:"max_subscriptions"`
+	InflightCount      int               `json:"inflight_count"`
+	MaxInflight        int               `json:"max_inflight"`
+	MqueueCount        int               `json:"mqueue_count"`
+	MaxMqueue          int               `json:"max_mqueue"`
+	UserProperties     map[string]string `json:"user_properties,omitempty"`
+	Node               string            `json:"node"`
+}
+
+// SessionInfo represents session information
+type SessionInfo struct {
+	ClientID           string     `json:"clientid"`
+	Username           string     `json:"username"`
+	CreatedAt          time.Time  `json:"created_at"`
+	ConnectedAt        *time.Time `json:"connected_at,omitempty"`
+	DisconnectedAt     *time.Time `json:"disconnected_at,omitempty"`
+	CleanSession       bool       `json:"clean_session"`
+	ExpiryInterval     int        `json:"expiry_interval"`
+	MaxSubscriptions   int        `json:"max_subscriptions"`
+	SubscriptionsCount int        `json:"subscriptions_count"`
+	MaxInflight        int        `json:"max_inflight"`
+	InflightCount      int        `json:"inflight_count"`
+	MaxMqueue          int        `json:"max_mqueue"`
+	MqueueCount        int        `json:"mqueue_count"`
+	MaxAwaitingRel     int        `json:"max_awaiting_rel"`
+	AwaitingRelCount   int        `json:"awaiting_rel_count"`
+	Node               string     `json:"node"`
+}
+
+// SubscriptionInfo represents subscription information
+type SubscriptionInfo struct {
+	ClientID string `json:"clientid"`
+	Topic    string `json:"topic"`
+	QoS      int    `json:"qos"`
+	Node     string `json:"node"`
+}
+
+// RouteInfo represents routing information
+type RouteInfo struct {
+	Topic string   `json:"topic"`
+	Nodes []string `json:"nodes"`
+}
+
+// NodeInfo represents node information
+type NodeInfo struct {
+	Node       string     `json:"node"`
+	NodeStatus string     `json:"node_status"`
+	OtpRelease string     `json:"otp_release"`
+	Version    string     `json:"version"`
+	Uptime     int64      `json:"uptime"`
+	Datetime   time.Time  `json:"datetime"`
+	SysMon     SysMonInfo `json:"sysMon"`
+}
+
+// SysMonInfo represents system monitoring information
+type SysMonInfo struct {
+	ProcCount    int64   `json:"procCount"`
+	ProcessLimit int64   `json:"processLimit"`
+	MemoryTotal  int64   `json:"memoryTotal"`
+	MemoryUsed   int64   `json:"memoryUsed"`
+	CPUIdle      float64 `json:"cpuIdle"`
+	CPULoad1     float64 `json:"cpuLoad1"`
+	CPULoad5     float64 `json:"cpuLoad5"`
+	CPULoad15    float64 `json:"cpuLoad15"`
+}
+
+// APIResponse represents a standard API response
+type APIResponse struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message,omitempty"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// NewAPIServer creates a new API server instance
+func NewAPIServer(metricsManager *metrics.MetricsManager, broker BrokerInterface) *APIServer {
+	return &APIServer{
+		metricsManager: metricsManager,
+		broker:         broker,
+	}
+}
+
+// SetReloadHandler registers the callback executed by POST /api/v5/reload.
+// main.go wires this to its config-reload closure (SIGHUP shares the same path).
+func (s *APIServer) SetReloadHandler(fn func() error) {
+	s.reloadHandler = fn
+}
+
+// RegisterRoutes registers all API routes
+func (s *APIServer) RegisterRoutes(mux *http.ServeMux) {
+	// Statistics and metrics endpoints
+	mux.HandleFunc("/api/v5/stats", s.handleStats)
+	mux.HandleFunc("/api/v5/metrics", s.handleMetrics)
+
+	// Connection management endpoints
+	mux.HandleFunc("/api/v5/connections", s.handleConnections)
+	mux.HandleFunc("/api/v5/connections/", s.handleConnectionByID)
+
+	// Session management endpoints
+	mux.HandleFunc("/api/v5/sessions", s.handleSessions)
+	mux.HandleFunc("/api/v5/sessions/", s.handleSessionByID)
+
+	// Subscription management endpoints
+	mux.HandleFunc("/api/v5/subscriptions", s.handleSubscriptions)
+	mux.HandleFunc("/api/v5/subscriptions/", s.handleSubscriptionByID)
+
+	// Route management endpoints
+	mux.HandleFunc("/api/v5/routes", s.handleRoutes)
+	mux.HandleFunc("/api/v5/routes/", s.handleRouteByTopic)
+
+	// Node and cluster endpoints
+	mux.HandleFunc("/api/v5/nodes", s.handleNodes)
+	mux.HandleFunc("/api/v5/nodes/", s.handleNodeByID)
+
+	// Blacklist management endpoints
+	mux.HandleFunc("/api/v5/blacklist", s.handleBlacklist)
+	mux.HandleFunc("/api/v5/blacklist/", s.handleBlacklistByID)
+	mux.HandleFunc("/api/v5/blacklist/stats", s.handleBlacklistStats)
+
+	// ACL management endpoints
+	mux.HandleFunc("/api/v5/acl", s.handleACL)
+	mux.HandleFunc("/api/v5/acl/", s.handleACLByID)
+	mux.HandleFunc("/api/v5/acl/stats", s.handleACLStats)
+
+	// Health check endpoints
+	mux.HandleFunc("/api/v5/status", s.handleStatus)
+	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/api/v5/prometheus/stats", s.handlePrometheusStats)
+
+	// Config hot-reload endpoint (emqx ctl-style). Disabled unless a reload
+	// handler is registered by main.go.
+	mux.HandleFunc("/api/v5/reload", s.handleReload)
+}
+
+// handleStats handles /api/v5/stats endpoint
+func (s *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	stats := s.metricsManager.GetStatistics()
+	s.writeSuccess(w, stats)
+}
+
+// handleMetrics handles /api/v5/metrics endpoint
+func (s *APIServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	stats := s.metricsManager.GetStatistics()
+	s.writeSuccess(w, stats)
+}
+
+// handleConnections handles /api/v5/connections endpoint
+func (s *APIServer) handleConnections(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		connections := s.broker.GetConnections()
+
+		// Apply pagination and filtering
+		page, limit := s.getPagination(r)
+		start := (page - 1) * limit
+		end := start + limit
+
+		if start > len(connections) {
+			start = len(connections)
+		}
+		if end > len(connections) {
+			end = len(connections)
+		}
+
+		result := struct {
+			Data []ConnectionInfo `json:"data"`
+			Meta PaginationMeta   `json:"meta"`
+		}{
+			Data: connections[start:end],
+			Meta: PaginationMeta{
+				Page:  page,
+				Limit: limit,
+				Count: len(connections[start:end]),
+				Total: len(connections),
+			},
+		}
+
+		s.writeSuccess(w, result)
+
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleConnectionByID handles /api/v5/connections/{clientid} endpoint
+func (s *APIServer) handleConnectionByID(w http.ResponseWriter, r *http.Request) {
+	clientID := s.extractIDFromPath(r.URL.Path, "/api/v5/connections/")
+	if clientID == "" {
+		s.writeError(w, http.StatusBadRequest, "Client ID is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		connections := s.broker.GetConnections()
+		for _, conn := range connections {
+			if conn.ClientID == clientID {
+				s.writeSuccess(w, conn)
+				return
+			}
+		}
+		s.writeError(w, http.StatusNotFound, "Connection not found")
+
+	case http.MethodDelete:
+		err := s.broker.DisconnectClient(clientID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.writeSuccess(w, map[string]string{"result": "disconnected"})
+
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleSessions handles /api/v5/sessions endpoint
+func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		sessions := s.broker.GetSessions()
+
+		// Apply pagination
+		page, limit := s.getPagination(r)
+		start := (page - 1) * limit
+		end := start + limit
+
+		if start > len(sessions) {
+			start = len(sessions)
+		}
+		if end > len(sessions) {
+			end = len(sessions)
+		}
+
+		result := struct {
+			Data []SessionInfo  `json:"data"`
+			Meta PaginationMeta `json:"meta"`
+		}{
+			Data: sessions[start:end],
+			Meta: PaginationMeta{
+				Page:  page,
+				Limit: limit,
+				Count: len(sessions[start:end]),
+				Total: len(sessions),
+			},
+		}
+
+		s.writeSuccess(w, result)
+
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleSessionByID handles /api/v5/sessions/{clientid} endpoint
+func (s *APIServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
+	clientID := s.extractIDFromPath(r.URL.Path, "/api/v5/sessions/")
+	if clientID == "" {
+		s.writeError(w, http.StatusBadRequest, "Client ID is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		sessions := s.broker.GetSessions()
+		for _, session := range sessions {
+			if session.ClientID == clientID {
+				s.writeSuccess(w, session)
+				return
+			}
+		}
+		s.writeError(w, http.StatusNotFound, "Session not found")
+
+	case http.MethodDelete:
+		err := s.broker.KickoutSession(clientID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.writeSuccess(w, map[string]string{"result": "kicked out"})
+
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleSubscriptions handles /api/v5/subscriptions endpoint
+func (s *APIServer) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	subscriptions := s.broker.GetSubscriptions()
+
+	// Apply pagination
+	page, limit := s.getPagination(r)
+	start := (page - 1) * limit
+	end := start + limit
+
+	if start > len(subscriptions) {
+		start = len(subscriptions)
+	}
+	if end > len(subscriptions) {
+		end = len(subscriptions)
+	}
+
+	result := struct {
+		Data []SubscriptionInfo `json:"data"`
+		Meta PaginationMeta     `json:"meta"`
+	}{
+		Data: subscriptions[start:end],
+		Meta: PaginationMeta{
+			Page:  page,
+			Limit: limit,
+			Count: len(subscriptions[start:end]),
+			Total: len(subscriptions),
+		},
+	}
+
+	s.writeSuccess(w, result)
+}
+
+// handleSubscriptionByID handles /api/v5/subscriptions/{clientid} endpoint
+func (s *APIServer) handleSubscriptionByID(w http.ResponseWriter, r *http.Request) {
+	clientID := s.extractIDFromPath(r.URL.Path, "/api/v5/subscriptions/")
+	if clientID == "" {
+		s.writeError(w, http.StatusBadRequest, "Client ID is required")
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	subscriptions := s.broker.GetSubscriptions()
+	var clientSubs []SubscriptionInfo
+	for _, sub := range subscriptions {
+		if sub.ClientID == clientID {
+			clientSubs = append(clientSubs, sub)
+		}
+	}
+
+	s.writeSuccess(w, clientSubs)
+}
+
+// handleRoutes handles /api/v5/routes endpoint
+func (s *APIServer) handleRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	routes := s.broker.GetRoutes()
+
+	// Apply pagination
+	page, limit := s.getPagination(r)
+	start := (page - 1) * limit
+	end := start + limit
+
+	if start > len(routes) {
+		start = len(routes)
+	}
+	if end > len(routes) {
+		end = len(routes)
+	}
+
+	result := struct {
+		Data []RouteInfo    `json:"data"`
+		Meta PaginationMeta `json:"meta"`
+	}{
+		Data: routes[start:end],
+		Meta: PaginationMeta{
+			Page:  page,
+			Limit: limit,
+			Count: len(routes[start:end]),
+			Total: len(routes),
+		},
+	}
+
+	s.writeSuccess(w, result)
+}
+
+// handleRouteByTopic handles /api/v5/routes/{topic} endpoint
+func (s *APIServer) handleRouteByTopic(w http.ResponseWriter, r *http.Request) {
+	topic := s.extractIDFromPath(r.URL.Path, "/api/v5/routes/")
+	if topic == "" {
+		s.writeError(w, http.StatusBadRequest, "Topic is required")
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	routes := s.broker.GetRoutes()
+	for _, route := range routes {
+		if route.Topic == topic {
+			s.writeSuccess(w, route)
+			return
+		}
+	}
+	s.writeError(w, http.StatusNotFound, "Route not found")
+}
+
+// handleNodes handles /api/v5/nodes endpoint
+func (s *APIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	nodes := s.broker.GetClusterNodes()
+	s.writeSuccess(w, nodes)
+}
+
+// handleNodeByID handles /api/v5/nodes/{node} endpoint
+func (s *APIServer) handleNodeByID(w http.ResponseWriter, r *http.Request) {
+	nodeID := s.extractIDFromPath(r.URL.Path, "/api/v5/nodes/")
+	if nodeID == "" {
+		s.writeError(w, http.StatusBadRequest, "Node ID is required")
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	nodes := s.broker.GetClusterNodes()
+	for _, node := range nodes {
+		if node.Node == nodeID {
+			s.writeSuccess(w, node)
+			return
+		}
+	}
+	s.writeError(w, http.StatusNotFound, "Node not found")
+}
+
+// handleStatus handles /api/v5/status endpoint
+func (s *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	nodeInfo := s.broker.GetNodeInfo()
+	stats := s.metricsManager.GetStatistics()
+
+	status := map[string]interface{}{
+		"node":          nodeInfo,
+		"connections":   stats.Connections,
+		"sessions":      stats.Sessions,
+		"subscriptions": stats.Subscriptions,
+	}
+
+	s.writeSuccess(w, status)
+}
+
+// handleHealth handles /health endpoint
+func (s *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	health := map[string]string{
+		"status": "ok",
+		"time":   time.Now().Format(time.RFC3339),
+	}
+
+	s.writeSuccess(w, health)
+}
+
+// handlePrometheusStats handles /api/v5/prometheus/stats endpoint
+func (s *APIServer) handlePrometheusStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// Update Prometheus metrics and return in Prometheus format
+	s.metricsManager.UpdatePrometheusMetrics()
+
+	// For now, return JSON format. In a real implementation,
+	// this would return Prometheus exposition format
+	stats := s.metricsManager.GetStatistics()
+	s.writeSuccess(w, stats)
+}
+
+// PaginationMeta represents pagination metadata
+type PaginationMeta struct {
+	Page  int `json:"page"`
+	Limit int `json:"limit"`
+	Count int `json:"count"`
+	Total int `json:"total"`
+}
+
+// Helper methods
+
+func (s *APIServer) writeSuccess(w http.ResponseWriter, data interface{}) {
+	response := APIResponse{
+		Code: 0,
+		Data: data,
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *APIServer) writeError(w http.ResponseWriter, statusCode int, message string) {
+	response := APIResponse{
+		Code:    statusCode,
+		Message: message,
+	}
+	s.writeJSON(w, statusCode, response)
+}
+
+func (s *APIServer) writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
+	}
+}
+
+// handleBlacklist handles /api/v5/blacklist endpoint for listing and creating blacklist entries
+func (s *APIServer) handleBlacklist(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleBlacklistList(w, r)
+	case http.MethodPost:
+		s.handleBlacklistCreate(w, r)
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleBlacklistList handles GET /api/v5/blacklist
+func (s *APIServer) handleBlacklistList(w http.ResponseWriter, r *http.Request) {
+	middleware := s.broker.GetBlacklistMiddleware()
+	if middleware == nil {
+		s.writeError(w, http.StatusInternalServerError, "Blacklist middleware not available")
+		return
+	}
+
+	// Parse query parameters
+	entryType := blacklist.BlacklistType(r.URL.Query().Get("type"))
+	enabledStr := r.URL.Query().Get("enabled")
+
+	var enabled *bool
+	if enabledStr != "" {
+		if enabledStr == "true" {
+			enabled = &[]bool{true}[0]
+		} else if enabledStr == "false" {
+			enabled = &[]bool{false}[0]
+		}
+	}
+
+	// Get blacklist entries
+	entries := middleware.GetManager().ListEntries(entryType, enabled)
+
+	// Convert to API response format
+	response := make([]map[string]interface{}, len(entries))
+	for i, entry := range entries {
+		response[i] = map[string]interface{}{
+			"id":          entry.ID,
+			"type":        string(entry.Type),
+			"value":       entry.Value,
+			"pattern":     entry.Pattern,
+			"action":      string(entry.Action),
+			"reason":      entry.Reason,
+			"description": entry.Description,
+			"enabled":     entry.Enabled,
+			"created_at":  entry.CreatedAt,
+			"updated_at":  entry.UpdatedAt,
+			"expires_at":  entry.ExpiresAt,
+			"created_by":  entry.CreatedBy,
+			"metadata":    entry.Metadata,
+		}
+	}
+
+	s.writeSuccess(w, response)
+}
+
+// handleBlacklistCreate handles POST /api/v5/blacklist
+func (s *APIServer) handleBlacklistCreate(w http.ResponseWriter, r *http.Request) {
+	middleware := s.broker.GetBlacklistMiddleware()
+	if middleware == nil {
+		s.writeError(w, http.StatusInternalServerError, "Blacklist middleware not available")
+		return
+	}
+
+	// Parse request body
+	var request struct {
+		Type        string                 `json:"type"`
+		Value       string                 `json:"value"`
+		Pattern     string                 `json:"pattern,omitempty"`
+		Action      string                 `json:"action"`
+		Reason      string                 `json:"reason,omitempty"`
+		Description string                 `json:"description,omitempty"`
+		Enabled     bool                   `json:"enabled"`
+		ExpiresAt   *time.Time             `json:"expires_at,omitempty"`
+		CreatedBy   string                 `json:"created_by,omitempty"`
+		Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid JSON format")
+		return
+	}
+
+	// Validate required fields
+	if request.Type == "" {
+		s.writeError(w, http.StatusBadRequest, "Type is required")
+		return
+	}
+	if request.Value == "" && request.Pattern == "" {
+		s.writeError(w, http.StatusBadRequest, "Either value or pattern is required")
+		return
+	}
+	if request.Action == "" {
+		s.writeError(w, http.StatusBadRequest, "Action is required")
+		return
+	}
+
+	// Create blacklist entry
+	entry := &blacklist.BlacklistEntry{
+		ID:          fmt.Sprintf("%s_%d", request.Type, time.Now().UnixNano()),
+		Type:        blacklist.BlacklistType(request.Type),
+		Value:       request.Value,
+		Pattern:     request.Pattern,
+		Action:      blacklist.BlacklistAction(request.Action),
+		Reason:      request.Reason,
+		Description: request.Description,
+		Enabled:     request.Enabled,
+		ExpiresAt:   request.ExpiresAt,
+		CreatedBy:   request.CreatedBy,
+		Metadata:    request.Metadata,
+	}
+
+	// Add to blacklist manager
+	if err := middleware.GetManager().AddEntry(entry); err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to add blacklist entry: %v", err))
+		return
+	}
+
+	// Return created entry
+	response := map[string]interface{}{
+		"id":          entry.ID,
+		"type":        string(entry.Type),
+		"value":       entry.Value,
+		"pattern":     entry.Pattern,
+		"action":      string(entry.Action),
+		"reason":      entry.Reason,
+		"description": entry.Description,
+		"enabled":     entry.Enabled,
+		"created_at":  entry.CreatedAt,
+		"updated_at":  entry.UpdatedAt,
+		"expires_at":  entry.ExpiresAt,
+		"created_by":  entry.CreatedBy,
+		"metadata":    entry.Metadata,
+	}
+
+	apiResponse := APIResponse{
+		Code: 0,
+		Data: response,
+	}
+	s.writeJSON(w, http.StatusCreated, apiResponse)
+}
+
+// handleBlacklistByID handles /api/v5/blacklist/{id} endpoint
+func (s *APIServer) handleBlacklistByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v5/blacklist/")
+	pathParts := strings.Split(path, "/")
+
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		s.writeError(w, http.StatusBadRequest, "Blacklist entry ID is required")
+		return
+	}
+
+	entryID := pathParts[0]
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleBlacklistGetByID(w, r, entryID)
+	case http.MethodPut:
+		s.handleBlacklistUpdate(w, r, entryID)
+	case http.MethodDelete:
+		s.handleBlacklistDelete(w, r, entryID)
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleBlacklistGetByID handles GET /api/v5/blacklist/{id}
+func (s *APIServer) handleBlacklistGetByID(w http.ResponseWriter, r *http.Request, entryID string) {
+	middleware := s.broker.GetBlacklistMiddleware()
+	if middleware == nil {
+		s.writeError(w, http.StatusInternalServerError, "Blacklist middleware not available")
+		return
+	}
+
+	entry, err := middleware.GetManager().GetEntry(entryID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, "Blacklist entry not found")
+		return
+	}
+
+	response := map[string]interface{}{
+		"id":          entry.ID,
+		"type":        string(entry.Type),
+		"value":       entry.Value,
+		"pattern":     entry.Pattern,
+		"action":      string(entry.Action),
+		"reason":      entry.Reason,
+		"description": entry.Description,
+		"enabled":     entry.Enabled,
+		"created_at":  entry.CreatedAt,
+		"updated_at":  entry.UpdatedAt,
+		"expires_at":  entry.ExpiresAt,
+		"created_by":  entry.CreatedBy,
+		"metadata":    entry.Metadata,
+	}
+
+	s.writeSuccess(w, response)
+}
+
+// handleBlacklistUpdate handles PUT /api/v5/blacklist/{id}
+func (s *APIServer) handleBlacklistUpdate(w http.ResponseWriter, r *http.Request, entryID string) {
+	middleware := s.broker.GetBlacklistMiddleware()
+	if middleware == nil {
+		s.writeError(w, http.StatusInternalServerError, "Blacklist middleware not available")
+		return
+	}
+
+	// Parse request body
+	var request struct {
+		Value       string                 `json:"value,omitempty"`
+		Pattern     string                 `json:"pattern,omitempty"`
+		Action      string                 `json:"action,omitempty"`
+		Reason      string                 `json:"reason,omitempty"`
+		Description string                 `json:"description,omitempty"`
+		Enabled     *bool                  `json:"enabled,omitempty"`
+		ExpiresAt   *time.Time             `json:"expires_at,omitempty"`
+		Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid JSON format")
+		return
+	}
+
+	// Get existing entry
+	existingEntry, err := middleware.GetManager().GetEntry(entryID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, "Blacklist entry not found")
+		return
+	}
+
+	// Create updated entry
+	updatedEntry := *existingEntry
+	if request.Value != "" {
+		updatedEntry.Value = request.Value
+	}
+	if request.Pattern != "" {
+		updatedEntry.Pattern = request.Pattern
+	}
+	if request.Action != "" {
+		updatedEntry.Action = blacklist.BlacklistAction(request.Action)
+	}
+	if request.Reason != "" {
+		updatedEntry.Reason = request.Reason
+	}
+	if request.Description != "" {
+		updatedEntry.Description = request.Description
+	}
+	if request.Enabled != nil {
+		updatedEntry.Enabled = *request.Enabled
+	}
+	if request.ExpiresAt != nil {
+		updatedEntry.ExpiresAt = request.ExpiresAt
+	}
+	if request.Metadata != nil {
+		updatedEntry.Metadata = request.Metadata
+	}
+
+	// Update entry
+	if err := middleware.GetManager().UpdateEntry(entryID, &updatedEntry); err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to update blacklist entry: %v", err))
+		return
+	}
+
+	// Return updated entry
+	response := map[string]interface{}{
+		"id":          updatedEntry.ID,
+		"type":        string(updatedEntry.Type),
+		"value":       updatedEntry.Value,
+		"pattern":     updatedEntry.Pattern,
+		"action":      string(updatedEntry.Action),
+		"reason":      updatedEntry.Reason,
+		"description": updatedEntry.Description,
+		"enabled":     updatedEntry.Enabled,
+		"created_at":  updatedEntry.CreatedAt,
+		"updated_at":  updatedEntry.UpdatedAt,
+		"expires_at":  updatedEntry.ExpiresAt,
+		"created_by":  updatedEntry.CreatedBy,
+		"metadata":    updatedEntry.Metadata,
+	}
+
+	s.writeSuccess(w, response)
+}
+
+// handleBlacklistDelete handles DELETE /api/v5/blacklist/{id}
+func (s *APIServer) handleBlacklistDelete(w http.ResponseWriter, r *http.Request, entryID string) {
+	middleware := s.broker.GetBlacklistMiddleware()
+	if middleware == nil {
+		s.writeError(w, http.StatusInternalServerError, "Blacklist middleware not available")
+		return
+	}
+
+	if err := middleware.GetManager().RemoveEntry(entryID); err != nil {
+		if err.Error() == "blacklist entry not found" {
+			s.writeError(w, http.StatusNotFound, "Blacklist entry not found")
+		} else {
+			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete blacklist entry: %v", err))
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleBlacklistStats handles GET /api/v5/blacklist/stats
+func (s *APIServer) handleBlacklistStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	middleware := s.broker.GetBlacklistMiddleware()
+	if middleware == nil {
+		s.writeError(w, http.StatusInternalServerError, "Blacklist middleware not available")
+		return
+	}
+
+	stats := middleware.GetStats()
+	s.writeSuccess(w, stats)
+}
+
+// --- ACL (authorization) API handlers ---
+// These mirror the blacklist handlers but operate on the ACL engine's rule
+// manager, exposing publish/subscribe authorization rules.
+
+// handleACL handles /api/v5/acl for listing and creating rules.
+func (s *APIServer) handleACL(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleACLList(w, r)
+	case http.MethodPost:
+		s.handleACLCreate(w, r)
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleACLList handles GET /api/v5/acl with optional permission/action/enabled
+// filters.
+func (s *APIServer) handleACLList(w http.ResponseWriter, r *http.Request) {
+	engine := s.broker.GetACLEngine()
+	if engine == nil {
+		s.writeError(w, http.StatusInternalServerError, "ACL engine not available")
+		return
+	}
+
+	permission := r.URL.Query().Get("permission")
+	action := r.URL.Query().Get("action")
+	enabledStr := r.URL.Query().Get("enabled")
+
+	var enabled *bool
+	if enabledStr != "" {
+		if enabledStr == "true" {
+			enabled = &[]bool{true}[0]
+		} else if enabledStr == "false" {
+			enabled = &[]bool{false}[0]
+		}
+	}
+
+	rules := engine.GetManager().ListRules(enabled)
+
+	response := make([]map[string]interface{}, 0, len(rules))
+	for _, rule := range rules {
+		if permission != "" && rule.Permission != permission {
+			continue
+		}
+		if action != "" && rule.Action != action && rule.Action != acl.ActionAll && rule.Action != acl.ActionPubSub {
+			continue
+		}
+		response = append(response, aclRuleToMap(rule))
+	}
+
+	s.writeSuccess(w, response)
+}
+
+// handleACLCreate handles POST /api/v5/acl.
+func (s *APIServer) handleACLCreate(w http.ResponseWriter, r *http.Request) {
+	engine := s.broker.GetACLEngine()
+	if engine == nil {
+		s.writeError(w, http.StatusInternalServerError, "ACL engine not available")
+		return
+	}
+
+	var request struct {
+		ID              string                 `json:"id,omitempty"`
+		Permission      string                 `json:"permission"`
+		Action          string                 `json:"action"`
+		Username        string                 `json:"username,omitempty"`
+		UsernamePattern string                 `json:"username_pattern,omitempty"`
+		ClientID        string                 `json:"clientid,omitempty"`
+		ClientIDPattern string                 `json:"clientid_pattern,omitempty"`
+		Topic           string                 `json:"topic,omitempty"`
+		Enabled         bool                   `json:"enabled"`
+		Priority        int                    `json:"priority"`
+		Description     string                 `json:"description,omitempty"`
+		Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid JSON format")
+		return
+	}
+
+	if request.Permission == "" {
+		s.writeError(w, http.StatusBadRequest, "Permission is required (allow or deny)")
+		return
+	}
+	if request.Permission != acl.PermissionAllow && request.Permission != acl.PermissionDeny {
+		s.writeError(w, http.StatusBadRequest, "Permission must be 'allow' or 'deny'")
+		return
+	}
+	if request.Action != "" {
+		switch request.Action {
+		case acl.ActionPublish, acl.ActionSubscribe, acl.ActionPubSub, acl.ActionAll:
+		default:
+			s.writeError(w, http.StatusBadRequest, "Action must be 'publish', 'subscribe', 'pubsub', or 'all'")
+			return
+		}
+	}
+
+	rule := &acl.Rule{
+		ID:              request.ID,
+		Permission:      request.Permission,
+		Action:          request.Action,
+		Username:        request.Username,
+		UsernamePattern: request.UsernamePattern,
+		ClientID:        request.ClientID,
+		ClientIDPattern: request.ClientIDPattern,
+		Topic:           request.Topic,
+		Enabled:         request.Enabled,
+		Priority:        request.Priority,
+		Description:     request.Description,
+		Metadata:        request.Metadata,
+	}
+
+	if err := engine.GetManager().AddRule(rule); err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to add ACL rule: %v", err))
+		return
+	}
+
+	s.writeJSON(w, http.StatusCreated, APIResponse{Code: 0, Data: aclRuleToMap(rule)})
+}
+
+// handleACLByID handles /api/v5/acl/{id} for get/update/delete.
+func (s *APIServer) handleACLByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v5/acl/")
+	pathParts := strings.Split(path, "/")
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		s.writeError(w, http.StatusBadRequest, "ACL rule ID is required")
+		return
+	}
+	ruleID := pathParts[0]
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleACLGetByID(w, r, ruleID)
+	case http.MethodPut:
+		s.handleACLUpdate(w, r, ruleID)
+	case http.MethodDelete:
+		s.handleACLDelete(w, r, ruleID)
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleACLGetByID handles GET /api/v5/acl/{id}.
+func (s *APIServer) handleACLGetByID(w http.ResponseWriter, r *http.Request, ruleID string) {
+	engine := s.broker.GetACLEngine()
+	if engine == nil {
+		s.writeError(w, http.StatusInternalServerError, "ACL engine not available")
+		return
+	}
+
+	rule := engine.GetManager().GetRule(ruleID)
+	if rule == nil {
+		s.writeError(w, http.StatusNotFound, "ACL rule not found")
+		return
+	}
+
+	s.writeSuccess(w, aclRuleToMap(rule))
+}
+
+// handleACLUpdate handles PUT /api/v5/acl/{id}. Enabled and Priority use pointer
+// fields so the dashboard can toggle a rule or bump priority without clobbering
+// other fields.
+func (s *APIServer) handleACLUpdate(w http.ResponseWriter, r *http.Request, ruleID string) {
+	engine := s.broker.GetACLEngine()
+	if engine == nil {
+		s.writeError(w, http.StatusInternalServerError, "ACL engine not available")
+		return
+	}
+
+	var request struct {
+		Permission      string                 `json:"permission,omitempty"`
+		Action          string                 `json:"action,omitempty"`
+		Username        string                 `json:"username,omitempty"`
+		UsernamePattern string                 `json:"username_pattern,omitempty"`
+		ClientID        string                 `json:"clientid,omitempty"`
+		ClientIDPattern string                 `json:"clientid_pattern,omitempty"`
+		Topic           string                 `json:"topic,omitempty"`
+		Enabled         *bool                  `json:"enabled,omitempty"`
+		Priority        *int                   `json:"priority,omitempty"`
+		Description     string                 `json:"description,omitempty"`
+		Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid JSON format")
+		return
+	}
+
+	updates := &acl.Rule{
+		Permission:      request.Permission,
+		Action:          request.Action,
+		Username:        request.Username,
+		UsernamePattern: request.UsernamePattern,
+		ClientID:        request.ClientID,
+		ClientIDPattern: request.ClientIDPattern,
+		Topic:           request.Topic,
+		Description:     request.Description,
+		Metadata:        request.Metadata,
+	}
+	if request.Enabled != nil {
+		updates.Enabled = *request.Enabled
+	}
+	if request.Priority != nil {
+		updates.Priority = *request.Priority
+	}
+
+	if err := engine.GetManager().UpdateRule(ruleID, updates); err != nil {
+		if err.Error() == fmt.Sprintf("rule %q not found", ruleID) {
+			s.writeError(w, http.StatusNotFound, "ACL rule not found")
+		} else {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to update ACL rule: %v", err))
+		}
+		return
+	}
+
+	rule := engine.GetManager().GetRule(ruleID)
+	s.writeSuccess(w, aclRuleToMap(rule))
+}
+
+// handleACLDelete handles DELETE /api/v5/acl/{id}.
+func (s *APIServer) handleACLDelete(w http.ResponseWriter, r *http.Request, ruleID string) {
+	engine := s.broker.GetACLEngine()
+	if engine == nil {
+		s.writeError(w, http.StatusInternalServerError, "ACL engine not available")
+		return
+	}
+
+	if err := engine.GetManager().RemoveRule(ruleID); err != nil {
+		if err.Error() == fmt.Sprintf("rule %q not found", ruleID) {
+			s.writeError(w, http.StatusNotFound, "ACL rule not found")
+		} else {
+			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete ACL rule: %v", err))
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleACLStats handles GET /api/v5/acl/stats.
+func (s *APIServer) handleACLStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	engine := s.broker.GetACLEngine()
+	if engine == nil {
+		s.writeError(w, http.StatusInternalServerError, "ACL engine not available")
+		return
+	}
+
+	stats := engine.GetStats()
+	s.writeSuccess(w, stats)
+}
+
+// handleReload handles POST /api/v5/reload, triggering a runtime config
+// re-read and re-apply (auth/ACL/hooks). It returns 501 if no reload handler
+// was registered (e.g. when running without a config file path).
+func (s *APIServer) handleReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if s.reloadHandler == nil {
+		s.writeError(w, http.StatusNotImplemented, "reload is not configured (no config path)")
+		return
+	}
+	if err := s.reloadHandler(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("reload failed: %v", err))
+		return
+	}
+	s.writeSuccess(w, map[string]string{"result": "reloaded"})
+}
+
+// aclRuleToMap converts an ACL rule into the API response representation.
+func aclRuleToMap(rule *acl.Rule) map[string]interface{} {
+	return map[string]interface{}{
+		"id":               rule.ID,
+		"permission":       rule.Permission,
+		"action":           rule.Action,
+		"username":         rule.Username,
+		"username_pattern": rule.UsernamePattern,
+		"clientid":         rule.ClientID,
+		"clientid_pattern": rule.ClientIDPattern,
+		"topic":            rule.Topic,
+		"enabled":          rule.Enabled,
+		"priority":         rule.Priority,
+		"description":      rule.Description,
+		"created_at":       rule.CreatedAt,
+		"updated_at":       rule.UpdatedAt,
+		"metadata":         rule.Metadata,
+	}
+}
+
+func (s *APIServer) extractIDFromPath(path, prefix string) string {
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
+	return strings.TrimPrefix(path, prefix)
+}
+
+func (s *APIServer) getPagination(r *http.Request) (page int, limit int) {
+	page = 1
+	limit = 20
+
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+			limit = l
+		}
+	}
+
+	return page, limit
+}
+
+// Serve starts the admin API server
+func Serve(addr string, metricsManager *metrics.MetricsManager, broker BrokerInterface) error {
+	server := NewAPIServer(metricsManager, broker)
+	mux := http.NewServeMux()
+
+	server.RegisterRoutes(mux)
+
+	fmt.Printf("Admin API server listening on %s\n", addr)
+	fmt.Printf("Available endpoints:\n")
+	fmt.Printf("  - /api/v5/stats (broker statistics)\n")
+	fmt.Printf("  - /api/v5/connections (connection management)\n")
+	fmt.Printf("  - /api/v5/sessions (session management)\n")
+	fmt.Printf("  - /api/v5/subscriptions (subscription management)\n")
+	fmt.Printf("  - /api/v5/routes (routing information)\n")
+	fmt.Printf("  - /api/v5/nodes (cluster nodes)\n")
+	fmt.Printf("  - /api/v5/blacklist (blacklist management)\n")
+	fmt.Printf("  - /api/v5/status (broker status)\n")
+	fmt.Printf("  - /health (health check)\n")
+
+	return http.ListenAndServe(addr, mux)
+}

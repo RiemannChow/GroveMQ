@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # Node 1
+  grovemq-node1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: grovemq-node1
+    hostname: grovemq-node1
+    environment:
+      - NODE_ID=node1
+      - MQTT_PORT=:1883
+      - GRPC_PORT=:8081
+      - METRICS_PORT=:8082
+    ports:
+      - "1883:1883"  # MQTT
+      - "8081:8081"  # gRPC
+      - "8082:8082"  # Metrics
+      - "18083:18083" # Dashboard
+    networks:
+      grovemq_cluster:
+        ipv4_address: 172.20.0.11
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "1883"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Node 2
+  grovemq-node2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: grovemq-node2
+    hostname: grovemq-node2
+    environment:
+      - NODE_ID=node2
+      - MQTT_PORT=:1883
+      - GRPC_PORT=:8081
+      - METRICS_PORT=:8082
+      - PEER_NODES=grovemq-node1:8081
+    ports:
+      - "1884:1883"  # MQTT
+      - "8083:8081"  # gRPC
+      - "8084:8082"  # Metrics
+      - "18084:18083" # Dashboard
+    networks:
+      grovemq_cluster:
+        ipv4_address: 172.20.0.12
+    depends_on:
+      - grovemq-node1
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "1883"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Node 3
+  grovemq-node3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: grovemq-node3
+    hostname: grovemq-node3
+    environment:
+      - NODE_ID=node3
+      - MQTT_PORT=:1883
+      - GRPC_PORT=:8081
+      - METRICS_PORT=:8082
+      - PEER_NODES=grovemq-node1:8081,grovemq-node2:8081
+    ports:
+      - "1885:1883"  # MQTT
+      - "8085:8081"  # gRPC
+      - "8086:8082"  # Metrics
+      - "18085:18083" # Dashboard
+    networks:
+      grovemq_cluster:
+        ipv4_address: 172.20.0.13
+    depends_on:
+      - grovemq-node1
+      - grovemq-node2
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "1883"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  grovemq_cluster:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16

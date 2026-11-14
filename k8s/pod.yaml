@@ -1,0 +1,22 @@
+# k8s/pod.yaml
+# A simple Kubernetes Pod definition for the GroveMQ Broker PoC.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: grovemq-pod
+  labels:
+    app: grovemq
+spec:
+  containers:
+  - name: grovemq
+    # The image name should be replaced with the actual image built and pushed
+    # to a container registry, e.g., "your-registry/grovemq:latest".
+    image: grovemq:latest
+    # We use "Never" for local testing with images built on the node.
+    # In a real deployment, this would be "IfNotPresent" or "Always".
+    imagePullPolicy: Never
+    ports:
+    - containerPort: 1883
+      name: mqtt
+      protocol: TCP

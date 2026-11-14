@@ -1,0 +1,105 @@
+# GroveMQ example configuration.
+# SECURITY: the users below are demo/test credentials used by the test suite.
+# Replace every password (and review auth / ACL / TLS) before exposing this
+# broker to any non-local network.
+broker:
+  node_id: grovemq-node
+  mqtt_port: :1883
+  # --- Config hot-reload (zero-downtime reconfiguration) ---
+  # Send SIGHUP to the process, or POST /api/v5/reload to the admin API, to
+  # re-read this file and re-apply auth / ACL / hooks WITHOUT restarting the
+  # broker or dropping live connections. Listeners/ports are bound once at
+  # startup and are NOT affected by reload (changing them needs a restart).
+  # WebSocket gateway for MQTT-over-WebSocket (clients connect to ws://host:port/mqtt
+  # with the "mqtt" subprotocol). Leave empty to keep the gateway disabled.
+  # Changing this port requires a restart (config reload does not rebind listeners).
+  websocket_port: ""
+  grpc_port: :8081
+  metrics_port: :8082
+  # --- Scalability / resilience tuning (all optional; defaults shown) ---
+  # mailbox_size: 100          # per-subscriber delivery mailbox capacity. A slow
+  #                            # or stalled subscriber fills its mailbox; once full,
+  #                            # best-effort (QoS 0) messages are dropped instead of
+  #                            # stalling the router. Raise for high fan-out topics.
+  # write_timeout: 0           # seconds; bounds how long a single outbound write to a
+  #                            # client may block before the session fails fast (0 = off).
+  # max_connections: 0         # hard cap on simultaneous live connections (0 = unlimited).
+  #                            # MQTT 5.0 clients over the limit get 0x97 (Quota Exceeded);
+  #                            # MQTT 3.1/3.1.1 clients are disconnected.
+  auth:
+    enabled: true
+    users:
+    - username: admin
+      password: admin123
+      algorithm: bcrypt
+      enabled: true
+    - username: user1
+      password: password123
+      algorithm: sha256
+      enabled: true
+    - username: test
+      password: test
+      algorithm: plain
+      enabled: true
+    - username: guest
+      password: guest123
+      algorithm: sha256
+      enabled: false
+    - username: device001
+      password: device_secret_key
+      algorithm: bcrypt
+      enabled: true
+    - username: newuser
+      password: updatedsecret
+      algorithm: bcrypt
+      enabled: false
+    - username: iot_device_123
+      password: secret_key_123
+      algorithm: sha256
+      enabled: true
+
+  # Authorization (ACL): who may publish/subscribe to which topics.
+  # Disabled by default -> all access allowed (no behavior change). When enabled,
+  # requests are evaluated against `rules` in priority order; the first matching
+  # rule decides (allow/deny). If nothing matches, `default_action` applies.
+  # `default_action: allow` = safe rollout; set to `deny` for strict lockdown.
+  acl:
+    enabled: false
+    default_action: allow
+    rules:
+    # Example: deny anonymous clients from writing control topics.
+    # - id: deny-anon-control
+    #   permission: deny
+    #   action: publish
+    #   username: anonymous
+    #   topic: control/#
+    #   priority: 1
+    #   enabled: true
+    # Example: allow device001 to publish only under its own prefix.
+    # - id: allow-device001
+    #   permission: allow
+    #   action: publish
+    #   username: device001
+    #   topic: devices/device001/#
+    #   priority: 10
+    #   enabled: true
+
+  # --- Hooks (extension points) ---
+  # All hooks are OPT-IN and OFF by default, so leaving this block out has zero
+  # effect on broker behaviour. The hook chain is always wired into the core
+  # loop; these settings only activate the built-in example hooks.
+  # New custom hooks can be registered programmatically via broker.GetHooks().
+  hooks:
+    # Per-client publish rate limiting (token bucket). Disabled = unlimited.
+    rate_limit:
+      enabled: false
+      publish_rate: 0   # tokens per second; 0 = unlimited
+      publish_burst: 0  # bucket capacity; 0 = unlimited
+    # Connection / session / message auditing via the standard logger ([AUDIT]).
+    audit:
+      enabled: false
+      # points left empty => a sensible default set is enabled (connect/disconnect,
+      # subscribe/unsubscribe, publish). Otherwise list specific points, e.g.:
+      # points:
+      #   - on_client_connected
+      #   - on_message_publish

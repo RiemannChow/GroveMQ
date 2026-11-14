@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GroveMQ Dashboard - ACL</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">GroveMQ Dashboard</div>
+                <nav class="nav">
+                    <a href="/dashboard">Overview</a>
+                    <a href="/connections">Clients</a>
+                    <a href="/subscriptions">Subscriptions</a>
+                    <a href="/monitoring">Monitoring</a>
+                    <a href="/blacklist">Blacklist</a>
+                    <a href="/acl" class="active">ACL</a>
+                </nav>
+                <div class="user-menu">
+                    <span>Welcome, <strong id="username">admin</strong></span>
+                    <button id="logout-btn" class="btn btn-small">Logout</button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">ACL (Authorization)</h1>
+                <div class="page-actions">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                        <input type="checkbox" id="auto-refresh" checked> Auto Refresh (5s)
+                    </label>
+                    <button id="refresh-btn" class="btn btn-primary btn-small">Refresh</button>
+                    <button id="new-rule-btn" class="btn btn-primary btn-small">New Rule</button>
+                    <span style="font-size: 12px; color: #8c8c8c;">
+                        Last updated: <span id="last-refresh-time">--:--:--</span>
+                    </span>
+                </div>
+            </div>
+
+            <!-- Notice about default behavior -->
+            <div class="card" style="margin-bottom: 16px;">
+                <div class="card-content" style="font-size: 13px; color: #8c8c8c;">
+                    ACL evaluates rules in priority order (lowest first); the first matching rule decides
+                    <strong>allow</strong> or <strong>deny</strong>. When no rule matches, the
+                    <strong>default action</strong> applies. Unmatched requests default to <strong>allow</strong>
+                    unless the broker is configured with <code>acl.default_action: deny</code>.
+                    ACL is disabled by default and must be enabled in <code>config.yaml</code>.
+                </div>
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="dashboard-grid">
+                <div class="metric-card">
+                    <div class="metric-title">Total Rules</div>
+                    <div class="metric-value" id="stat-total">0</div>
+                    <div class="metric-change">Enabled: <span id="stat-enabled">0</span></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Allow Rules</div>
+                    <div class="metric-value" style="color: #52c41a;" id="stat-allow">0</div>
+                    <div class="metric-change">Permit publish/subscribe</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Deny Rules</div>
+                    <div class="metric-value" style="color: #f5222d;" id="stat-deny">0</div>
+                    <div class="metric-change">Block publish/subscribe</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Recent Denials</div>
+                    <div class="metric-value" id="stat-denials">0</div>
+                    <div class="metric-change">Match: <span id="stat-match">0</span></div>
+                </div>
+            </div>
+
+            <!-- Rules Table -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Rules</h2>
+                </div>
+                <div class="card-content">
+                    <div class="table-container">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Permission</th>
+                                    <th>Action</th>
+                                    <th>Username</th>
+                                    <th>Client ID</th>
+                                    <th>Topic</th>
+                                    <th>Priority</th>
+                                    <th>Enabled</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="acl-table-body">
+                                <tr>
+                                    <td colspan="9" style="text-align: center; color: #8c8c8c; padding: 24px;">
+                                        Loading ACL rules...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- New/Edit Rule Modal -->
+    <div id="rule-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">New ACL Rule</h3>
+                <span class="modal-close" id="modal-close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="rule-form">
+                    <input type="hidden" id="rule-id">
+                    <div class="form-group">
+                        <label>Permission</label>
+                        <select id="rule-permission" required>
+                            <option value="allow">Allow</option>
+                            <option value="deny">Deny</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Action</label>
+                        <select id="rule-action">
+                            <option value="all">All</option>
+                            <option value="publish">Publish</option>
+                            <option value="subscribe">Subscribe</option>
+                            <option value="pubsub">Pub/Sub</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Username (empty = any; "anonymous" = empty username)</label>
+                        <input type="text" id="rule-username" placeholder="e.g. device001">
+                    </div>
+                    <div class="form-group">
+                        <label>Username Regex (optional)</label>
+                        <input type="text" id="rule-username-pattern" placeholder="e.g. ^device.*">
+                    </div>
+                    <div class="form-group">
+                        <label>Client ID (empty = any)</label>
+                        <input type="text" id="rule-clientid" placeholder="e.g. client-123">
+                    </div>
+                    <div class="form-group">
+                        <label>Client ID Regex (optional)</label>
+                        <input type="text" id="rule-clientid-pattern" placeholder="e.g. ^client-.*">
+                    </div>
+                    <div class="form-group">
+                        <label>Topic Filter (empty = any; supports +/#)</label>
+                        <input type="text" id="rule-topic" placeholder="e.g. devices/+/telemetry">
+                    </div>
+                    <div class="form-group">
+                        <label>Priority (lower evaluated first)</label>
+                        <input type="number" id="rule-priority" value="100">
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <input type="text" id="rule-description" placeholder="optional">
+                    </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="rule-enabled" checked> Enabled
+                        </label>
+                    </div>
+                    <div id="rule-error" class="form-error" style="color: #f5222d; font-size: 13px;"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-small" id="modal-cancel">Cancel</button>
+                <button class="btn btn-primary btn-small" id="modal-save">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/acl.js"></script>
+
+    <style>
+        .badge-allow { background: #f6ffed; color: #52c41a; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+        .badge-deny { background: #fff1f0; color: #f5222d; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+        .badge-enabled { background: #f6ffed; color: #52c41a; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+        .badge-disabled { background: #f5f5f5; color: #8c8c8c; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+        .form-group { margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
+        .form-group label { font-size: 13px; font-weight: 500; }
+        .form-group input, .form-group select {
+            padding: 8px 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px;
+        }
+        .modal {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 100;
+        }
+        .modal-content {
+            background: #fff; border-radius: 10px; width: 520px; max-width: 92%; max-height: 90%; overflow-y: auto;
+        }
+        .modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 16px 20px; border-bottom: 1px solid #f0f0f0;
+        }
+        .modal-close { cursor: pointer; font-size: 22px; color: #8c8c8c; }
+        .modal-body { padding: 20px; }
+        .modal-footer {
+            padding: 14px 20px; border-top: 1px solid #f0f0f0; display: flex; justify-content: flex-end; gap: 10px;
+        }
+    </style>
+</body>
+</html>

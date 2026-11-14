@@ -1,0 +1,58 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 2,
+      "targets": [
+        {
+          "expr": "grovemq_connections_count",
+          "refId": "A",
+          "legendFormat": "{{instance}} - Connections"
+        }
+      ],
+      "title": "Active Connections by Node",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 3,
+      "targets": [
+        {
+          "expr": "sum(grovemq_connections_count)",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Active Connections",
+      "type": "gauge"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 27,
+  "style": "dark",
+  "tags": ["grovemq", "mqtt", "cluster"],
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "GroveMQ Cluster Dashboard",
+  "uid": "grovemq-cluster",
+  "version": 1,
+  "description": "Comprehensive monitoring dashboard for GroveMQ MQTT broker cluster"
+}

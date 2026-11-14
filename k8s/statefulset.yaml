@@ -1,0 +1,40 @@
+# k8s/statefulset.yaml
+# This StatefulSet manages the deployment and scaling of a set of grovemq pods.
+# It provides guarantees about the ordering and uniqueness of these pods.
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: grovemq
+spec:
+  # The serviceName must match the name of the headless service.
+  # This is crucial for providing stable network identifiers to the pods.
+  serviceName: "grovemq-headless"
+  # We start with 2 replicas to test clustering.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: grovemq
+  template:
+    metadata:
+      labels:
+        app: grovemq
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+      - name: grovemq
+        # Replace with the actual image path from your container registry.
+        image: grovemq:latest
+        imagePullPolicy: Never # For local testing
+        ports:
+        - containerPort: 1883
+          name: mqtt
+        - containerPort: 8081
+          name: grpc
+        env:
+          # The POD_NAMESPACE is used by the discovery mechanism to find peers.
+          # The Downward API is used to inject the pod's namespace into the env var.
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace

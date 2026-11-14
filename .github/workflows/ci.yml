@@ -1,0 +1,101 @@
+name: GroveMQ CI
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Run go vet
+        run: go vet ./...
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      # Suites under tests/ are integration tests: they need a live broker and
+      # are not race-clean (paho message callbacks share unsynchronized test-local
+      # state). They are exercised by the contract-test job below, which starts
+      # the broker first. This job runs the pure unit/package tests with -race.
+      - name: Run unit and package tests
+        run: go test -race ./pkg/... ./cmd/...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build the application
+        run: go build -v ./cmd/grovemq
+
+  contract-test:
+    name: Contract Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Run Broker and Contract / Integration Tests
+        run: |
+          go run ./cmd/grovemq &
+          # Wait until the MQTT listener actually accepts connections instead of
+          # relying on a fixed sleep (a cold `go run` build can be slow on CI).
+          for i in $(seq 1 60); do
+            if (echo > /dev/tcp/127.0.0.1/1883) >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          (echo > /dev/tcp/127.0.0.1/1883) >/dev/null 2>&1 || {
+            echo "Broker did not start listening on 1883"
+            exit 1
+          }
+          # -p 1 keeps the two broker-dependent suites serial so they cannot
+          # interfere with each other through shared topics / retained messages.
+          go test -v -p 1 ./tests/contract/... ./tests/unit/...
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Docker image
+        run: docker build -t grovemq:ci-test .
