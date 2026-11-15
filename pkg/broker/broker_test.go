@@ -29,6 +29,7 @@ import (
 	"github.com/turtacn/grovemq/pkg/acl"
 	"github.com/turtacn/grovemq/pkg/auth"
 	"github.com/turtacn/grovemq/pkg/hooks"
+	"github.com/turtacn/grovemq/pkg/session"
 	"github.com/turtacn/grovemq/pkg/storage"
 )
 
@@ -597,4 +598,51 @@ func TestBroker_NoClientIDAuthBypass(t *testing.T) {
 	require.True(t, goodToken.WaitTimeout(3*time.Second))
 	require.NoError(t, goodToken.Error(), "valid credentials must work with any client ID")
 	good.Disconnect(100)
+}
+
+// readSessionPublish registers a session with the given protocol version,
+// pushes one QoS 0 publish through its mailbox and returns the raw bytes the
+// session actor wrote to the connection.
+func readSessionPublish(t *testing.T, version byte) []byte {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	b := New("test-node", nil)
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	mb := b.registerSession(ctx, "version-client", serverConn, version, nil)
+	require.NotNil(t, mb)
+	mb.Send(session.Publish{Topic: "a/b", Payload: []byte("X"), QoS: 0})
+
+	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(3*time.Second)))
+	buf := make([]byte, 256)
+	n, err := clientConn.Read(buf)
+	require.NoError(t, err)
+	return buf[:n]
+}
+
+// TestBroker_SessionUsesNegotiatedProtocolVersion guards against a regression
+// where registerSession hard-coded MQTT 3.1.1, so a v5 client's outbound
+// PUBLISH lacked the mandatory MQTT 5.0 Property Length byte and could not be
+// parsed by a conformant client.
+func TestBroker_SessionUsesNegotiatedProtocolVersion(t *testing.T) {
+	// Fixed header(1) + remaining length(1) + topic length(2) + "a/b"(3) = 7.
+	const propertyLengthOffset = 1 + 1 + 2 + len("a/b")
+
+	v4 := readSessionPublish(t, 4)
+	require.Greater(t, len(v4), propertyLengthOffset)
+	require.Equal(t, byte('X'), v4[propertyLengthOffset],
+		"MQTT 3.1.1 PUBLISH has no property block; payload starts right after the topic")
+
+	v5 := readSessionPublish(t, 5)
+	require.Greater(t, len(v5), propertyLengthOffset+1)
+	require.Equal(t, byte(0x00), v5[propertyLengthOffset],
+		"MQTT 5.0 PUBLISH must start its variable header properties with Property Length 0")
+	require.Equal(t, byte('X'), v5[propertyLengthOffset+1],
+		"payload must follow the MQTT 5.0 property length")
 }

@@ -881,7 +881,10 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 			}
 
 			log.Printf("[DEBUG] Registering session for TLS client %s", clientID)
-			sessionMailbox = b.registerSession(connCtx, clientID, conn, 4, persistentSession) // Default to MQTT 3.1.1
+			// Pass the version negotiated in CONNECT so the session actor encodes
+			// outbound PUBLISH/SUBACK/DISCONNECT packets with the right MQTT 5.0
+			// property block (and reason codes) instead of always emitting 3.1.1.
+			sessionMailbox = b.registerSession(connCtx, clientID, conn, pk.ProtocolVersion, persistentSession)
 			log.Printf("[DEBUG] Session registered successfully for TLS client %s, mailbox: %p", clientID, sessionMailbox)
 
 			b.mu.Lock()
@@ -1303,7 +1306,10 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 
 			// Register session for actor management
 			log.Printf("[DEBUG] Registering session for client %s", connectClientID)
-			sessionMailbox = b.registerSession(connCtx, connectClientID, conn, 4, persistentSession) // Default to MQTT 3.1.1
+			// Use the version negotiated in CONNECT. Hard-coding 4 here disabled
+			// the MQTT 5.0 property encoder in session.encodePublishPacket even
+			// for clients that completed a v5 handshake.
+			sessionMailbox = b.registerSession(connCtx, connectClientID, conn, pk.ProtocolVersion, persistentSession)
 			log.Printf("[DEBUG] Session registered successfully for client %s, mailbox: %p", connectClientID, sessionMailbox)
 
 			// Create topic alias manager for this client (MQTT 5.0)
