@@ -40,8 +40,9 @@ type UserConfig struct {
 
 // AuthConfig represents the authentication configuration
 type AuthConfig struct {
-	Enabled bool         `yaml:"enabled" json:"enabled"`
-	Users   []UserConfig `yaml:"users" json:"users"`
+	Enabled        bool         `yaml:"enabled" json:"enabled"`
+	AllowAnonymous bool         `yaml:"allow_anonymous" json:"allow_anonymous"`
+	Users          []UserConfig `yaml:"users" json:"users"`
 }
 
 // ACLRuleConfig represents a single ACL rule in configuration
@@ -129,6 +130,10 @@ func DefaultConfig() *Config {
 			DashboardPort: ":18083",
 			Auth: AuthConfig{
 				Enabled: true,
+				// Keep the built-in default in sync with the shipped config.yaml:
+				// the demo broker opts into anonymous access explicitly. Operators
+				// can disable it by setting allow_anonymous: false in their config.
+				AllowAnonymous: true,
 				Users: []UserConfig{
 					{
 						Username:  "admin",
@@ -303,6 +308,11 @@ func validateConfig(config *Config) error {
 
 // ConfigureAuth configures authentication from the config
 func (c *Config) ConfigureAuth(authChain *auth.AuthChain) error {
+	// Anonymous access is an explicit opt-in, not an accidental side effect of
+	// enabling authentication. Apply it on every (re)configure so a hot reload
+	// cannot silently re-open an anonymous back door.
+	authChain.SetAllowAnonymous(c.Broker.Auth.AllowAnonymous)
+
 	if !c.Broker.Auth.Enabled {
 		// Swap in an empty, disabled chain atomically.
 		authChain.Replace(nil, false)

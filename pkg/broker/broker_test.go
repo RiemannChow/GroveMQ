@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/turtacn/grovemq/pkg/acl"
+	"github.com/turtacn/grovemq/pkg/auth"
 	"github.com/turtacn/grovemq/pkg/hooks"
 	"github.com/turtacn/grovemq/pkg/storage"
 )
@@ -558,4 +559,42 @@ func TestBroker_QoS1DeliveryAndAck(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return b.persistentSessionMgr.CountInflight(subID) == 0
 	}, 3*time.Second, 20*time.Millisecond, "QoS1 inflight must be cleared after PUBACK")
+}
+
+// TestBroker_NoClientIDAuthBypass guards against a remote authentication
+// bypass: the broker used to skip the auth chain for client IDs with certain
+// "fuzz"/"qos-test" prefixes. Clients choose their own client ID, so any such
+// prefix allow-list lets unauthenticated clients straight in.
+func TestBroker_NoClientIDAuthBypass(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	b, addr := startTestBroker(ctx, t)
+
+	memAuth := auth.NewMemoryAuthenticator()
+	require.NoError(t, memAuth.AddUser("known", "secret", auth.HashPlain))
+	b.GetAuthChain().Replace([]auth.Authenticator{memAuth}, true)
+	b.GetAuthChain().SetAllowAnonymous(false)
+
+	attacker := mqtt.NewClient(mqtt.NewClientOptions().
+		AddBroker(addr).
+		SetClientID("fuzz-evil-client").
+		SetUsername("attacker").
+		SetPassword("wrong-password").
+		SetConnectTimeout(2 * time.Second))
+	token := attacker.Connect()
+	require.True(t, token.WaitTimeout(3*time.Second), "CONNECT must be answered with a refusal")
+	require.Error(t, token.Error(), "a fuzz-prefixed client ID must not bypass authentication")
+
+	// A configured user must still connect, including with a look-alike ID.
+	good := mqtt.NewClient(mqtt.NewClientOptions().
+		AddBroker(addr).
+		SetClientID("fuzz-looking-but-valid").
+		SetUsername("known").
+		SetPassword("secret").
+		SetConnectTimeout(2 * time.Second))
+	goodToken := good.Connect()
+	require.True(t, goodToken.WaitTimeout(3*time.Second))
+	require.NoError(t, goodToken.Error(), "valid credentials must work with any client ID")
+	good.Disconnect(100)
 }

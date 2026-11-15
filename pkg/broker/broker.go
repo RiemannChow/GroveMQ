@@ -287,6 +287,12 @@ func New(nodeID string, clusterMgr *cluster.Manager) *Broker {
 		MailboxSize:          100, // default subscriber mailbox capacity
 	}
 
+	// A programmatically constructed broker has no credentials configured. Keep
+	// the chain disabled so it does not fail closed on every connection; the
+	// production entrypoint enables and populates it via config.ConfigureAuth,
+	// and tests can opt into enforcement with SetupDefaultAuth / GetAuthChain.
+	b.authChain.SetEnabled(false)
+
 	// Wire the inflight retry callback so the session manager can ask the broker
 	// to redeliver unacknowledged QoS 1/2 messages to their subscribers.
 	sessionMgr.SetRetryCallback(b.redeliver)
@@ -487,6 +493,10 @@ func (b *Broker) SetupDefaultAuth() {
 	memAuth.AddUser("test", "test", auth.HashPlain)
 
 	b.authChain.AddAuthenticator(memAuth)
+	// Enable the chain so these sample users are actually enforced, and keep
+	// anonymous access available for tests that connect without credentials.
+	b.authChain.SetEnabled(true)
+	b.authChain.SetAllowAnonymous(true)
 	log.Printf("[INFO] Default authentication configured with memory authenticator")
 	log.Printf("[INFO] Default users: admin/admin123, user1/password123, test/test")
 }
@@ -754,7 +764,9 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 				connackCode = connackReturnCode(pk.ProtocolVersion, 0x80) // Unspecified error
 				log.Printf("[ERROR] Authentication error for TLS client %s (user: %s)", clientID, username)
 			case auth.AuthIgnore:
-				// If authentication is ignored (no authenticators or all skip), allow connection
+				// AuthIgnore means the chain was explicitly disabled via config
+				// (auth.enabled=false). An enabled chain never returns AuthIgnore;
+				// it returns AuthFailure for unknown users instead.
 				connackCode = packets.CodeSuccess.Code
 				log.Printf("[INFO] Authentication ignored for TLS client %s (user: %s), allowing connection", clientID, username)
 			}
@@ -1144,22 +1156,11 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 				return
 			}
 
-			// Perform authentication (with testing bypass for security test clients)
-			var authResult auth.AuthResult
-
-			// SECURITY TESTING BYPASS: Allow specific test clients to bypass authentication for security testing
-			// Note: This is more restrictive to avoid interfering with authentication tests
-			if strings.HasPrefix(connectClientID, "fuzz") || strings.HasPrefix(connectClientID, "mbfuzzer") ||
-				strings.HasPrefix(connectClientID, "defensics") || strings.HasPrefix(connectClientID, "pubfuzz") ||
-				strings.HasPrefix(connectClientID, "subfuzz") || strings.HasPrefix(connectClientID, "qosfuzz") ||
-				strings.HasPrefix(connectClientID, "topicfuzz") || strings.HasPrefix(connectClientID, "pktfuzz") ||
-				strings.HasPrefix(connectClientID, "race-client") || strings.HasPrefix(connectClientID, "flood-client") ||
-				strings.HasPrefix(connectClientID, "qos-test") || strings.HasPrefix(connectClientID, "packetid-test") {
-				authResult = auth.AuthIgnore
-				log.Printf("[DEBUG] Bypassing authentication for security test client: %s", connectClientID)
-			} else {
-				authResult = b.authChain.Authenticate(username, password)
-			}
+			// Every connection goes through the configured authentication chain.
+			// There is deliberately no client-ID based bypass: an untrusted client
+			// can choose its own client ID, so any prefix allow-list is a remote
+			// authentication bypass.
+			authResult := b.authChain.Authenticate(username, password)
 
 			log.Printf("[DEBUG] Authentication result for client %s (user: %s): %s", connectClientID, username, authResult.String())
 
@@ -1175,7 +1176,9 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 				connackCode = connackReturnCode(pk.ProtocolVersion, 0x80) // Unspecified error
 				log.Printf("[ERROR] Authentication error for client %s (user: %s)", connectClientID, username)
 			case auth.AuthIgnore:
-				// If authentication is ignored (no authenticators or all skip), allow connection
+				// AuthIgnore means the chain was explicitly disabled via config
+				// (auth.enabled=false). An enabled chain never returns AuthIgnore;
+				// it returns AuthFailure for unknown users instead.
 				connackCode = packets.CodeSuccess.Code
 				log.Printf("[INFO] Authentication ignored for client %s (user: %s), allowing connection", connectClientID, username)
 			}

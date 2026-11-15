@@ -240,9 +240,10 @@ func TestAuthChain(t *testing.T) {
 	assert.True(t, chain.IsEnabled())
 	assert.Equal(t, 0, chain.Count())
 
-	// Test empty chain (should allow by default)
+	// An enabled chain with no authenticators must fail closed rather than
+	// silently admitting every connection.
 	result := chain.Authenticate("user", "password")
-	assert.Equal(t, AuthSuccess, result)
+	assert.Equal(t, AuthFailure, result)
 
 	// Add first authenticator
 	auth1 := NewMemoryAuthenticator()
@@ -301,9 +302,33 @@ func TestAuthChain(t *testing.T) {
 	chain.Clear()
 	assert.Equal(t, 0, chain.Count())
 
-	// Empty chain should allow by default
+	// Empty enabled chain fails closed.
 	result = chain.Authenticate("anyuser", "anypassword")
-	assert.Equal(t, AuthSuccess, result)
+	assert.Equal(t, AuthFailure, result)
+}
+
+func TestAuthChain_AnonymousIsExplicitOptIn(t *testing.T) {
+	memAuth := NewMemoryAuthenticator()
+	require.NoError(t, memAuth.AddUser("known", "secret", HashPlain))
+	chain := NewAuthChain()
+	chain.AddAuthenticator(memAuth)
+
+	// By default an unknown user with no credentials is denied, even though
+	// every authenticator returned AuthIgnore.
+	assert.False(t, chain.AllowAnonymous())
+	assert.Equal(t, AuthFailure, chain.Authenticate("", ""))
+	assert.Equal(t, AuthFailure, chain.Authenticate("unknown", "whatever"))
+	assert.Equal(t, AuthSuccess, chain.Authenticate("known", "secret"))
+
+	// Only an explicit opt-in admits anonymous connections.
+	chain.SetAllowAnonymous(true)
+	assert.True(t, chain.AllowAnonymous())
+	assert.Equal(t, AuthSuccess, chain.Authenticate("", ""))
+	assert.Equal(t, AuthFailure, chain.Authenticate("unknown", "whatever"))
+
+	// A disabled chain is an explicit "auth off" signal to the broker.
+	chain.SetEnabled(false)
+	assert.Equal(t, AuthIgnore, chain.Authenticate("unknown", "whatever"))
 }
 
 func TestAuthResult(t *testing.T) {

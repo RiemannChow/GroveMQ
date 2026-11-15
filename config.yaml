@@ -28,6 +28,10 @@ broker:
   #                            # MQTT 3.1/3.1.1 clients are disconnected.
   auth:
     enabled: true
+    # Allow clients that present no username/password. This is an explicit
+    # opt-in for local development and the test suite; set it to false before
+    # exposing the broker to any untrusted network.
+    allow_anonymous: true
     users:
     - username: admin
       password: admin123

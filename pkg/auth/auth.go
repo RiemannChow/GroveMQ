@@ -97,14 +97,37 @@ type AuthChain struct {
 	mu             sync.RWMutex
 	authenticators []Authenticator
 	enabled        bool
+	allowAnonymous bool
 }
 
-// NewAuthChain creates a new authentication chain
+// NewAuthChain creates a new authentication chain. An enabled chain with no
+// authenticators denies every connection (fail closed). Callers that build a
+// broker programmatically (tests, embedding) should disable the chain until
+// real credentials are configured; the production entrypoint does this via
+// config.ConfigureAuth.
 func NewAuthChain() *AuthChain {
 	return &AuthChain{
 		authenticators: make([]Authenticator, 0),
 		enabled:        true,
+		allowAnonymous: false,
 	}
+}
+
+// SetAllowAnonymous controls whether a client presenting no username and no
+// password is admitted when every authenticator ignored it. It defaults to
+// false so enabling authentication cannot silently leave an anonymous back
+// door open; deployments that want anonymous access must opt in explicitly.
+func (ac *AuthChain) SetAllowAnonymous(allow bool) {
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	ac.allowAnonymous = allow
+}
+
+// AllowAnonymous reports whether anonymous connections are explicitly allowed.
+func (ac *AuthChain) AllowAnonymous() bool {
+	ac.mu.RLock()
+	defer ac.mu.RUnlock()
+	return ac.allowAnonymous
 }
 
 // AddAuthenticator adds an authenticator to the chain
@@ -125,12 +148,15 @@ func (ac *AuthChain) Replace(authenticators []Authenticator, enabled bool) {
 	ac.enabled = enabled
 }
 
-// Authenticate processes authentication through the chain
-// Following EMQX's authentication flow:
-// - If any authenticator returns AuthSuccess, authentication succeeds
-// - If any authenticator returns AuthFailure, authentication fails
-// - If all authenticators return AuthIgnore, authentication fails
-// - If any authenticator returns AuthError, log error and continue
+// Authenticate processes authentication through the chain:
+// - A disabled chain returns AuthIgnore (the broker treats this as "auth off").
+// - An enabled chain with no authenticators fails closed: a missing user
+//   database is a misconfiguration, not a reason to admit everyone.
+// - If any authenticator returns AuthSuccess, authentication succeeds.
+// - If any authenticator returns AuthFailure, authentication fails.
+// - If all authenticators return AuthIgnore/AuthError, the connection is
+//   denied, unless anonymous access was explicitly enabled via
+//   SetAllowAnonymous and the client supplied no credentials.
 func (ac *AuthChain) Authenticate(username, password string) AuthResult {
 	ac.mu.RLock()
 	defer ac.mu.RUnlock()
@@ -140,8 +166,8 @@ func (ac *AuthChain) Authenticate(username, password string) AuthResult {
 	}
 
 	if len(ac.authenticators) == 0 {
-		log.Printf("[WARN] No authenticators configured, allowing connection")
-		return AuthSuccess
+		log.Printf("[WARN] Authentication is enabled but no authenticators are configured; denying connection")
+		return AuthFailure
 	}
 
 	log.Printf("[DEBUG] Starting authentication chain for user: %s", username)
@@ -172,16 +198,16 @@ func (ac *AuthChain) Authenticate(username, password string) AuthResult {
 		}
 	}
 
-	// If all authenticators returned AuthIgnore:
-	// - Empty username with empty password: allow as anonymous
-	// - Empty username with non-empty password: reject (credentials mismatch)
-	// - Non-empty username not found: this case should be handled by returning AuthIgnore only for empty username
-	if username == "" && password == "" {
-		log.Printf("[INFO] All authenticators skipped/ignored for empty credentials, allowing anonymous connection")
+	// All authenticators ignored this client. Anonymous access is only granted
+	// when it was explicitly opted into; otherwise an unknown user (with or
+	// without credentials) is denied.
+	if ac.allowAnonymous && username == "" && password == "" {
+		log.Printf("[INFO] All authenticators skipped/ignored for empty credentials, allowing explicitly configured anonymous connection")
 		return AuthSuccess
 	}
 
-	log.Printf("[WARN] All authenticators skipped/ignored for user: %s (password provided: %t), denying access", username, password != "")
+	log.Printf("[WARN] All authenticators skipped/ignored for user: %s (password provided: %t, anonymous allowed: %t), denying access",
+		username, password != "", ac.allowAnonymous)
 	return AuthFailure
 }
 

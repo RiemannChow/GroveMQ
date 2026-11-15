@@ -22,6 +22,11 @@ func TestDefaultConfig(t *testing.T) {
 
 	// Test auth defaults
 	assert.True(t, cfg.Broker.Auth.Enabled)
+	// The built-in default must opt into anonymous access explicitly, just like
+	// the shipped config.yaml. If this drifts back to false, running the broker
+	// with no --config silently rejects anonymous clients while config.yaml
+	// still allows them.
+	assert.True(t, cfg.Broker.Auth.AllowAnonymous)
 	assert.Len(t, cfg.Broker.Auth.Users, 3) // admin, user1, test
 
 	// Verify default users
