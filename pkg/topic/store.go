@@ -21,6 +21,7 @@ package topic
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/turtacn/grovemq/pkg/actor"
 )
@@ -37,7 +38,11 @@ type SharedSubscription struct {
 	Group     string
 	Topic     string
 	Mailboxes []*Subscription
-	NextIndex int // For round-robin distribution
+	// NextIndex is a monotonically increasing round-robin cursor. It is read
+	// under Store.mu.RLock by GetSubscribers, so it must be updated atomically
+	// rather than with a plain assignment (a write under a shared lock races
+	// with other readers). Use atomic.AddUint32/LoadUint32/StoreUint32 only.
+	NextIndex uint32
 }
 
 // Store provides a thread-safe, in-memory mapping of topic strings to lists of
@@ -176,10 +181,8 @@ func (s *Store) unsubscribeShared(shareTopic string, mailbox *actor.Mailbox) {
 
 		if len(newMailboxes) > 0 {
 			sharedSub.Mailboxes = newMailboxes
-			// Reset index if it's out of bounds
-			if sharedSub.NextIndex >= len(newMailboxes) {
-				sharedSub.NextIndex = 0
-			}
+			// The cursor no longer needs clamping: selection always applies
+			// modulo len(Mailboxes), so a shrinking group stays in bounds.
 		} else {
 			// No more subscribers, remove the shared subscription
 			delete(s.sharedSubscriptions, groupKey)
@@ -227,12 +230,14 @@ func (s *Store) getSharedSubscribersForTopic(topic string) []*Subscription {
 	// Check all shared subscriptions to see if topic matches
 	for _, sharedSub := range s.sharedSubscriptions {
 		if matchesTopicFilter(topic, sharedSub.Topic) && len(sharedSub.Mailboxes) > 0 {
-			// Round-robin selection
-			selected := sharedSub.Mailboxes[sharedSub.NextIndex]
+			// Round-robin selection. The mailbox slice is stable because the
+			// caller holds at least an RLock (writers need the exclusive lock),
+			// but NextIndex is shared by every concurrent reader, so advance it
+			// atomically. The unbounded uint32 wraps naturally; modulo keeps the
+			// index inside the current slice.
+			idx := atomic.AddUint32(&sharedSub.NextIndex, 1) - 1
+			selected := sharedSub.Mailboxes[int(idx%uint32(len(sharedSub.Mailboxes)))]
 			selectedSubs = append(selectedSubs, selected)
-
-			// Update next index for round-robin (with locking, we can modify safely)
-			sharedSub.NextIndex = (sharedSub.NextIndex + 1) % len(sharedSub.Mailboxes)
 		}
 	}
 
@@ -308,9 +313,7 @@ func (s *Store) RemoveAllSubscriptions(mailbox *actor.Mailbox) []string {
 		if removedFromShared {
 			if len(updated) > 0 {
 				sharedSub.Mailboxes = updated
-				if sharedSub.NextIndex >= len(updated) {
-					sharedSub.NextIndex = 0
-				}
+				// Selection is modulo len(Mailboxes); no cursor clamping needed.
 			} else {
 				delete(s.sharedSubscriptions, groupKey)
 			}

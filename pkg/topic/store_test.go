@@ -15,9 +15,12 @@
 package topic
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/turtacn/grovemq/pkg/actor"
 )
 
@@ -68,4 +71,56 @@ func TestStore(t *testing.T) {
 
 	// Test Unsubscribe from non-existent topic
 	s.Unsubscribe("non/existent", mb1)
+}
+
+// TestSharedSubscriptionConcurrentSelection is a -race regression test for the
+// round-robin cursor: GetSubscribers holds only an RLock, so concurrent readers
+// used to perform a plain read/write of NextIndex and raced with each other.
+// The cursor must be advanced atomically so every publish is distributed
+// deterministically without a data race.
+func TestSharedSubscriptionConcurrentSelection(t *testing.T) {
+	const (
+		subscribers = 4
+		goroutines  = 8
+		iterations  = 500
+	)
+
+	s := NewStore()
+	mailboxes := make([]*actor.Mailbox, subscribers)
+	for i := range mailboxes {
+		mailboxes[i] = actor.NewMailbox(16)
+		s.Subscribe("$share/group/topic", "client-"+string(rune('a'+i)), mailboxes[i], 1)
+	}
+
+	counts := make([]int64, subscribers)
+	var unexpected int64
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				subs := s.GetSubscribers("topic")
+				if len(subs) != 1 {
+					atomic.AddInt64(&unexpected, 1)
+					continue
+				}
+				for idx, mb := range mailboxes {
+					if subs[0].Mailbox == mb {
+						atomic.AddInt64(&counts[idx], 1)
+						break
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	require.Zero(t, unexpected, "shared subscription must select exactly one subscriber")
+	var total int64
+	for i, c := range counts {
+		assert.NotZero(t, c, "subscriber %d never received a shared message", i)
+		total += c
+	}
+	assert.Equal(t, int64(goroutines*iterations), total, "every publish must select exactly one subscriber")
 }
