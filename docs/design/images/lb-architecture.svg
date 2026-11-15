@@ -1,0 +1,172 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1400" viewBox="0 0 1800 1400" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Arial Unicode MS, sans-serif">
+<rect width="1800" height="1400" fill="#F6F8FC"/>
+<text x="46" y="44" font-size="27" fill="#16203A" text-anchor="start" dominant-baseline="auto" font-weight="700">GroveMQ 负载均衡设计 · 接入层 + 消息转发层</text>
+<text x="46" y="80" font-size="14" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">基线 52d0abf  ·  虚线框 = 本期新增/改造  ·  实线箭头 = 数据面，虚线箭头 = 控制面</text>
+<rect x="60" y="118" width="300" height="116" rx="9" fill="#F1F5F9" stroke="#C9D4E3" stroke-width="1.5"/>
+<rect x="60" y="118" width="300" height="32" rx="9" fill="#46546B"/>
+<rect x="60" y="140" width="300" height="10" rx="0" fill="#46546B"/>
+<text x="74" y="134.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">MQTT 客户端</text>
+<text x="74" y="172" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">3.1.1 / 5.0 长连接</text>
+<text x="74" y="195" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">IoT · 车联网 · AI 设备</text>
+<text x="74" y="218" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">PUBLISH / SUBSCRIBE / CONNECT</text>
+<circle cx="392" cy="176" r="15" fill="#2563EB" stroke="#FFFFFF" stroke-width="2"/>
+<text x="392" y="177" font-size="15" fill="#FFFFFF" text-anchor="middle" dominant-baseline="middle" font-weight="700">1</text>
+<rect x="46" y="260" width="1708" height="250" rx="12" fill="#EFF6FF" stroke="#2563EB" stroke-width="1.4" stroke-dasharray="7,5"/>
+<rect x="46" y="260" width="8" height="250" rx="4" fill="#2563EB"/>
+<text x="70" y="284" font-size="17" fill="#2563EB" text-anchor="start" dominant-baseline="auto" font-weight="700">① 接入层负载均衡</text>
+<text x="70" y="308" font-size="13.2" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">决策对象：一条 CONNECT（低频，只在建连瞬间）</text>
+<rect x="430" y="320" width="250" height="152" rx="9" fill="#FFFFFF" stroke="#93C5FD" stroke-width="1.5"/>
+<rect x="430" y="320" width="250" height="30" rx="9" fill="#2563EB"/>
+<rect x="430" y="340" width="250" height="10" rx="0" fill="#2563EB"/>
+<text x="444" y="335.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">Mode A · L4 LB</text>
+<text x="444" y="372" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">k8s Service type: LoadBalancer</text>
+<text x="444" y="394" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">sessionAffinity: ClientIP</text>
+<text x="444" y="416" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">externalTrafficPolicy: Local</text>
+<text x="444" y="438" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">长连接：只分流新连接</text>
+<text x="444" y="460" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">禁止 HTTP / Ingress 代理 MQTT</text>
+<rect x="700" y="320" width="250" height="152" rx="9" fill="#FFFFFF" stroke="#C9B2F2" stroke-width="1.5"/>
+<rect x="700" y="320" width="250" height="30" rx="9" fill="#6D3BD1"/>
+<rect x="700" y="340" width="250" height="10" rx="0" fill="#6D3BD1"/>
+<text x="714" y="335.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">Mode B · MQTT 5 重定向</text>
+<text x="714" y="372" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">CONNACK 0x9C Use another server</text>
+<text x="714" y="394" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">Properties.ServerReference</text>
+<text x="714" y="416" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">mochi 已支持，无需写 codec</text>
+<text x="714" y="438" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">单跳 + HMAC token + cooldown</text>
+<text x="714" y="460" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">3.1.1 不支持 → 本地接受</text>
+<rect x="970" y="320" width="250" height="152" rx="9" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.5"/>
+<rect x="970" y="320" width="250" height="30" rx="9" fill="#07835D"/>
+<rect x="970" y="340" width="250" height="10" rx="0" fill="#07835D"/>
+<text x="984" y="335.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">pkg/balancer（新增）</text>
+<text x="984" y="372" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">AdmissionController.OnConnect</text>
+<text x="984" y="394" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">认证通过后才判定</text>
+<text x="984" y="416" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">soft_limit 默认 0.8</text>
+<text x="984" y="438" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">MQTT_ADVERTISE_ADDR（≠ gRPC）</text>
+<text x="984" y="460" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">负载 stale → 禁用重定向</text>
+<rect x="1240" y="320" width="250" height="152" rx="9" fill="#FFFFFF" stroke="#F5C86B" stroke-width="1.5"/>
+<rect x="1240" y="320" width="250" height="30" rx="9" fill="#C2740A"/>
+<rect x="1240" y="340" width="250" height="10" rx="0" fill="#C2740A"/>
+<text x="1254" y="335.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">NodeLoadTable（新增）</text>
+<text x="1254" y="372" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">node_id → connections / sessions</text>
+<text x="1254" y="394" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">SyncNodeStatus 心跳捎带</text>
+<text x="1254" y="416" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">本节点读 ConnectionsGauge</text>
+<text x="1254" y="438" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">2×heartbeat 未更新 = stale</text>
+<text x="1254" y="460" font-size="12.4" fill="#16203A" text-anchor="start" dominant-baseline="auto">不复用死代码 clustermon</text>
+<polyline points="360,176 430,340" fill="none" stroke="#2563EB" stroke-width="2.2"/>
+<polygon points="430.0,340.0 421.9,332.5 430.2,329.0" fill="#2563EB"/>
+<text x="372" y="152" font-size="13.2" fill="#2563EB" text-anchor="start" dominant-baseline="auto" font-weight="700">① 建连</text>
+<polyline points="680,396 700,396" fill="none" stroke="#46546B" stroke-width="2.0"/>
+<polygon points="700.0,396.0 690.0,400.5 690.0,391.5" fill="#46546B"/>
+<polyline points="950,396 970,396" fill="none" stroke="#46546B" stroke-width="2.0"/>
+<polygon points="970.0,396.0 960.0,400.5 960.0,391.5" fill="#46546B"/>
+<polyline points="1220,396 1240,396" fill="none" stroke="#46546B" stroke-width="2.0"/>
+<polygon points="1240.0,396.0 1230.0,400.5 1230.0,391.5" fill="#46546B"/>
+<polyline points="1490,396 1620,396 1620,258 900,258 900,176 700,176 700,320" fill="none" stroke="#6D3BD1" stroke-width="2.0" stroke-dasharray="6,4"/>
+<polygon points="700.0,320.0 695.5,310.0 704.5,310.0" fill="#6D3BD1"/>
+<text x="1495" y="236" font-size="13.0" fill="#6D3BD1" text-anchor="start" dominant-baseline="auto" font-weight="700">0x9C 引导重连</text>
+<text x="1520" y="430" font-size="13.0" fill="#C2740A" text-anchor="start" dominant-baseline="auto" font-weight="700">控制面：负载上报</text>
+<rect x="46" y="540" width="1708" height="246" rx="12" fill="#ECFDF5" stroke="#07835D" stroke-width="1.4" stroke-dasharray="7,5"/>
+<rect x="46" y="540" width="8" height="246" rx="4" fill="#07835D"/>
+<text x="70" y="564" font-size="17" fill="#07835D" text-anchor="start" dominant-baseline="auto" font-weight="700">② 集群节点（3 节点示意）</text>
+<text x="70" y="588" font-size="13.2" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">每节点：listener · Session Actor · topic.Store · cluster.Manager · durable store</text>
+<rect x="70" y="600" width="520" height="156" rx="9" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.5"/>
+<rect x="70" y="600" width="520" height="30" rx="9" fill="#07835D"/>
+<rect x="70" y="620" width="520" height="10" rx="0" fill="#07835D"/>
+<text x="84" y="615.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">Node 1</text>
+<text x="84" y="652" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">MQTT listener :1883 / :8883 / WS</text>
+<text x="84" y="675" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">Session Actor（mailbox 背压）</text>
+<text x="84" y="698" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">topic.Store：$share 组内原子轮询 NextIndex</text>
+<text x="84" y="721" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">cluster.Manager：remoteRoutes 本地副本</text>
+<text x="84" y="744" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">gRPC :8081 · NODE_ADVERTISE_ADDR（P0-5）</text>
+<polyline points="1480,472 330,600" fill="none" stroke="#46546B" stroke-width="1.8" stroke-dasharray="5,4"/>
+<polygon points="330.0,600.0 339.5,594.4 340.5,603.3" fill="#46546B"/>
+<rect x="640" y="600" width="520" height="156" rx="9" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.5"/>
+<rect x="640" y="600" width="520" height="30" rx="9" fill="#07835D"/>
+<rect x="640" y="620" width="520" height="10" rx="0" fill="#07835D"/>
+<text x="654" y="615.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">Node 2</text>
+<text x="654" y="652" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">MQTT listener :1883 / :8883 / WS</text>
+<text x="654" y="675" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">Session Actor（mailbox 背压）</text>
+<text x="654" y="698" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">topic.Store：$share 组内原子轮询 NextIndex</text>
+<text x="654" y="721" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">cluster.Manager：remoteRoutes 本地副本</text>
+<text x="654" y="744" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">gRPC :8081 · NODE_ADVERTISE_ADDR（P0-5）</text>
+<polyline points="640,472 900,600" fill="none" stroke="#46546B" stroke-width="1.8" stroke-dasharray="5,4"/>
+<polygon points="900.0,600.0 889.0,599.6 893.0,591.5" fill="#46546B"/>
+<rect x="1210" y="600" width="520" height="156" rx="9" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.5"/>
+<rect x="1210" y="600" width="520" height="30" rx="9" fill="#07835D"/>
+<rect x="1210" y="620" width="520" height="10" rx="0" fill="#07835D"/>
+<text x="1224" y="615.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">Node 3</text>
+<text x="1224" y="652" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">MQTT listener :1883 / :8883 / WS</text>
+<text x="1224" y="675" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">Session Actor（mailbox 背压）</text>
+<text x="1224" y="698" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">topic.Store：$share 组内原子轮询 NextIndex</text>
+<text x="1224" y="721" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">cluster.Manager：remoteRoutes 本地副本</text>
+<text x="1224" y="744" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">gRPC :8081 · NODE_ADVERTISE_ADDR（P0-5）</text>
+<polyline points="1210,472 1470,600" fill="none" stroke="#46546B" stroke-width="1.8" stroke-dasharray="5,4"/>
+<polygon points="1470.0,600.0 1459.0,599.6 1463.0,591.5" fill="#46546B"/>
+<polyline points="1365,472 1365,540" fill="none" stroke="#C2740A" stroke-width="1.8" stroke-dasharray="5,4"/>
+<polygon points="1365.0,540.0 1360.5,530.0 1369.5,530.0" fill="#C2740A"/>
+<rect x="46" y="816" width="1708" height="400" rx="12" fill="#F4EFFE" stroke="#6D3BD1" stroke-width="1.4" stroke-dasharray="7,5"/>
+<rect x="46" y="816" width="8" height="400" rx="4" fill="#6D3BD1"/>
+<text x="70" y="840" font-size="17" fill="#6D3BD1" text-anchor="start" dominant-baseline="auto" font-weight="700">③ 消息转发层负载均衡</text>
+<text x="70" y="864" font-size="13.2" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">决策对象：一条 PUBLISH（高频热路径，纯内存 O(匹配节点数)，禁 RPC）</text>
+<rect x="70" y="880" width="360" height="168" rx="9" fill="#FFFFFF" stroke="#F3B8B4" stroke-width="1.5"/>
+<rect x="70" y="880" width="360" height="30" rx="9" fill="#B3261E"/>
+<rect x="70" y="900" width="360" height="10" rx="0" fill="#B3261E"/>
+<text x="84" y="895.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">匹配路由（改造）</text>
+<text x="84" y="932" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">remoteRoutes: RouteKey{Group, Filter}</text>
+<text x="84" y="957" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">ParseSharedFilter 剥离 $share/g/</text>
+<text x="84" y="982" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">SUBACK 0x9F 拒绝非法 filter</text>
+<text x="84" y="1007" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">routes:v2 双读兼容滚动升级</text>
+<text x="84" y="1032" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">修复：原样注册 $share/g/t 永不命中</text>
+<rect x="460" y="880" width="360" height="168" rx="9" fill="#FFFFFF" stroke="#C9B2F2" stroke-width="1.5"/>
+<rect x="460" y="880" width="360" height="30" rx="9" fill="#6D3BD1"/>
+<rect x="460" y="900" width="360" height="10" rx="0" fill="#6D3BD1"/>
+<text x="474" y="895.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">NodeSelector（新增）</text>
+<text x="474" y="932" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">RoundRobin（按 group 分桶，粘性）</text>
+<text x="474" y="957" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">LeastConnections（NodeLoadTable）</text>
+<text x="474" y="982" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">ConsistentHash（组级粘性）</text>
+<text x="474" y="1007" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">平局按 nodeID 字典序，确定性</text>
+<text x="474" y="1032" font-size="12.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">失败 / stale → fan-out 兜底</text>
+<rect x="860" y="880" width="420" height="168" rx="9" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.5"/>
+<rect x="860" y="880" width="420" height="30" rx="9" fill="#2563EB"/>
+<rect x="860" y="900" width="420" height="10" rx="0" fill="#2563EB"/>
+<text x="874" y="895.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">普通订阅 · 保持 fan-out</text>
+<text x="874" y="932" font-size="12.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">语义要求：所有匹配订阅者都收到</text>
+<text x="874" y="959" font-size="12.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">目标 = 全部匹配节点</text>
+<text x="874" y="986" font-size="12.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">行为与基线一致，不能做均衡</text>
+<text x="874" y="1013" font-size="12.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">回归验收：3 节点 → 3 次投递</text>
+<rect x="1310" y="880" width="420" height="168" rx="9" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.5"/>
+<rect x="1310" y="880" width="420" height="30" rx="9" fill="#07835D"/>
+<rect x="1310" y="900" width="420" height="10" rx="0" fill="#07835D"/>
+<text x="1324" y="895.0" font-size="15.5" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">$share 组 · 单选 1 个节点</text>
+<text x="1324" y="932" font-size="12.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">ForwardPublish{SharedGroup=g}</text>
+<text x="1324" y="959" font-size="12.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">目标节点 GetSharedSubscribersForGroup</text>
+<text x="1324" y="986" font-size="12.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">本地 NextIndex 再选 1 个成员 → 恰好 1 次</text>
+<text x="1324" y="1013" font-size="12.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">验收：3 节点发布 100 条 → 100 次投递</text>
+<polyline points="430,964 460,964" fill="none" stroke="#6D3BD1" stroke-width="2.4"/>
+<polygon points="460.0,964.0 450.0,968.5 450.0,959.5" fill="#6D3BD1"/>
+<polyline points="820,930 860,930" fill="none" stroke="#2563EB" stroke-width="2.2"/>
+<polygon points="860.0,930.0 850.0,934.5 850.0,925.5" fill="#2563EB"/>
+<polyline points="820,1000 1310,1000" fill="none" stroke="#07835D" stroke-width="2.2"/>
+<polygon points="1310.0,1000.0 1300.0,1004.5 1300.0,995.5" fill="#07835D"/>
+<polyline points="250,756 250,880" fill="none" stroke="#46546B" stroke-width="1.8"/>
+<polygon points="250.0,880.0 245.5,870.0 254.5,870.0" fill="#46546B"/>
+<polyline points="1070,756 1070,880" fill="none" stroke="#46546B" stroke-width="1.8"/>
+<polygon points="1070.0,880.0 1065.5,870.0 1074.5,870.0" fill="#46546B"/>
+<rect x="70" y="1072" width="820" height="118" rx="9" fill="#FFFBEB" stroke="#C2740A" stroke-width="1.3"/>
+<rect x="70" y="1072" width="820" height="30" rx="9" fill="#C2740A"/>
+<rect x="70" y="1094" width="820" height="8" rx="0" fill="#C2740A"/>
+<text x="82" y="1087" font-size="13.6" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">关键约束</text>
+<text x="82" y="1122" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">① 修复跨节点 $share 是 P0 bug，不是增强；可独立先发（commit #1）</text>
+<text x="82" y="1150" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">② 转发层选点不得持 Manager.mu 做网络 I/O；Snapshot() 返回只读副本</text>
+<text x="82" y="1178" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">③ 宁可重复不可丢失：选点失败一律退回 fan-out，并打点 lb_stale_fallback_total</text>
+<rect x="910" y="1072" width="820" height="118" rx="9" fill="#F1F5F9" stroke="#46546B" stroke-width="1.3"/>
+<rect x="910" y="1072" width="820" height="30" rx="9" fill="#46546B"/>
+<rect x="910" y="1094" width="820" height="8" rx="0" fill="#46546B"/>
+<text x="922" y="1087" font-size="13.6" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">不在本期范围</text>
+<text x="922" y="1122" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">· topic 分片 / 一致性哈希分区（docs/phase-3/RISK.md:51）</text>
+<text x="922" y="1150" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 跨节点 QoS 1/2 可靠性（PublishForward 缺 MessageId/Retain/Dup）</text>
+<text x="922" y="1178" font-size="12.7" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 已有连接在线迁移、自动扩缩容、ApplyStateEntries union-only 缺陷</text>
+<rect x="46" y="1218" width="1708" height="42" rx="7" fill="#F1F5F9" stroke="#C9D4E3" stroke-width="1.2"/>
+<text x="62" y="1239" font-size="12.6" fill="#46546B" text-anchor="start" dominant-baseline="middle" font-family="ui-monospace, Menlo, monospace">代码定位：broker.go 1505/1524/2413/1236 · manager.go 339/348/392/537 · server.go 102/139 · store.go 199/226/238 · proto: pkg/proto/cluster/cluster.proto</text>
+<text x="46" y="1300" font-size="12.8" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">GroveMQ · Load Balancing Design (Draft)   |   ① 接入层 CONNECT   ·   ③ 转发层 PUBLISH   |   详见 docs/design/LOAD_BALANCING.md</text>
+<text x="1740" y="1300" font-size="12.8" fill="#5B6B87" text-anchor="end" dominant-baseline="middle">1 / 2</text>
+</svg>

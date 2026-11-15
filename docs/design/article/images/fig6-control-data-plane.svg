@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1020" viewBox="0 0 1600 1020" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Arial Unicode MS, sans-serif">
+<rect width="1600" height="1020" fill="#F6F8FC"/>
+<rect x="0" y="0" width="1600" height="100" rx="8" fill="#FFFFFF"/>
+<rect x="0" y="0" width="10" height="100" rx="8" fill="#6D3BD1"/>
+<text x="40" y="40" font-size="25" fill="#16203A" text-anchor="start" dominant-baseline="auto" font-weight="700">图 6  控制面与数据面的频率分离</text>
+<text x="40" y="76" font-size="14" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">负载 5 秒更新一次，消息每微秒决策一次 —— 两者必须解耦，用数据新鲜度换可扩展性</text>
+<line x1="40" y1="96" x2="1560" y2="96" stroke="#C9D4E3" stroke-width="1.2"/>
+<rect x="40" y="130" width="1520" height="268" rx="10" fill="#FFFBEB" stroke="#F5C86B" stroke-width="1.4"/>
+<text x="64" y="160" font-size="18" fill="#C2740A" text-anchor="start" dominant-baseline="auto" font-weight="700">控制面 · 低频（每 5s，随心跳捎带）</text>
+<rect x="70" y="200" width="150" height="76" rx="8" fill="#FFFFFF" stroke="#F5C86B" stroke-width="1.3"/>
+<text x="145" y="228" font-size="17" fill="#C2740A" text-anchor="middle" dominant-baseline="middle" font-weight="700">N1</text>
+<text x="145" y="254" font-size="11.6" fill="#5B6B87" text-anchor="middle" dominant-baseline="middle">ConnectionsGauge</text>
+<polyline points="145,276 145,316" fill="none" stroke="#C2740A" stroke-width="1.8"/>
+<polygon points="145.0,316.0 140.5,306.0 149.5,306.0" fill="#C2740A"/>
+<rect x="260" y="200" width="150" height="76" rx="8" fill="#FFFFFF" stroke="#F5C86B" stroke-width="1.3"/>
+<text x="335" y="228" font-size="17" fill="#C2740A" text-anchor="middle" dominant-baseline="middle" font-weight="700">N2</text>
+<text x="335" y="254" font-size="11.6" fill="#5B6B87" text-anchor="middle" dominant-baseline="middle">ConnectionsGauge</text>
+<polyline points="335,276 335,316" fill="none" stroke="#C2740A" stroke-width="1.8"/>
+<polygon points="335.0,316.0 330.5,306.0 339.5,306.0" fill="#C2740A"/>
+<rect x="450" y="200" width="150" height="76" rx="8" fill="#FFFFFF" stroke="#F5C86B" stroke-width="1.3"/>
+<text x="525" y="228" font-size="17" fill="#C2740A" text-anchor="middle" dominant-baseline="middle" font-weight="700">N3</text>
+<text x="525" y="254" font-size="11.6" fill="#5B6B87" text-anchor="middle" dominant-baseline="middle">ConnectionsGauge</text>
+<polyline points="525,276 525,316" fill="none" stroke="#C2740A" stroke-width="1.8"/>
+<polygon points="525.0,316.0 520.5,306.0 529.5,306.0" fill="#C2740A"/>
+<text x="690" y="300" font-size="13.6" fill="#C2740A" text-anchor="start" dominant-baseline="auto" font-weight="700">SyncNodeStatus 响应捎带 NodeLoad{connections, sessions, max, ts}</text>
+<rect x="690" y="320" width="830" height="56" rx="8" fill="#FFFFFF" stroke="#F5C86B" stroke-width="1.3"/>
+<text x="1105" y="348" font-size="13.4" fill="#16203A" text-anchor="middle" dominant-baseline="middle" font-weight="700">NodeLoadTable  ·  Snapshot() 返回只读副本  ·  2×heartbeat 未更新 = stale</text>
+<rect x="40" y="420" width="1520" height="470" rx="10" fill="#F4EFFE" stroke="#C9B2F2" stroke-width="1.4"/>
+<text x="64" y="450" font-size="18" fill="#6D3BD1" text-anchor="start" dominant-baseline="auto" font-weight="700">数据面 · 高频（每消息，纯内存 O(|L|)）</text>
+<rect x="70" y="500" width="120" height="72" rx="8" fill="#FFFFFF" stroke="#C9B2F2" stroke-width="1.3"/>
+<text x="130.0" y="524" font-size="12.8" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700">PUBLISH</text>
+<polyline points="190,536 250,536" fill="none" stroke="#6D3BD1" stroke-width="2.0"/>
+<polygon points="250.0,536.0 240.0,540.5 240.0,531.5" fill="#6D3BD1"/>
+<rect x="250" y="500" width="170" height="72" rx="8" fill="#FFFFFF" stroke="#C9B2F2" stroke-width="1.3"/>
+<text x="335.0" y="524" font-size="12.8" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700">matchWith</text>
+<text x="335.0" y="544" font-size="12.8" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700">Groups()</text>
+<polyline points="420,536 450,536" fill="none" stroke="#6D3BD1" stroke-width="2.0"/>
+<polygon points="450.0,536.0 440.0,540.5 440.0,531.5" fill="#6D3BD1"/>
+<rect x="450" y="500" width="170" height="72" rx="8" fill="#FFFFFF" stroke="#C9B2F2" stroke-width="1.3"/>
+<text x="535.0" y="524" font-size="12.8" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700">Snapshot()</text>
+<text x="535.0" y="544" font-size="12.8" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700">只读副本</text>
+<polyline points="620,536 650,536" fill="none" stroke="#6D3BD1" stroke-width="2.0"/>
+<polygon points="650.0,536.0 640.0,540.5 640.0,531.5" fill="#6D3BD1"/>
+<rect x="650" y="500" width="150" height="72" rx="8" fill="#FFFFFF" stroke="#C9B2F2" stroke-width="1.3"/>
+<text x="725.0" y="524" font-size="12.8" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700">Select()</text>
+<text x="725.0" y="544" font-size="12.8" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700">纯函数</text>
+<polyline points="800,536 830,536" fill="none" stroke="#6D3BD1" stroke-width="2.0"/>
+<polygon points="830.0,536.0 820.0,540.5 820.0,531.5" fill="#6D3BD1"/>
+<rect x="830" y="500" width="160" height="72" rx="8" fill="#FFFFFF" stroke="#C9B2F2" stroke-width="1.3"/>
+<text x="910.0" y="524" font-size="12.8" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700">Forward</text>
+<text x="910.0" y="544" font-size="12.8" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700">Publish</text>
+<text x="70" y="596" font-size="13.4" fill="#6D3BD1" text-anchor="start" dominant-baseline="auto" font-weight="700">禁 RPC 同步查负载  ·  禁持 Manager.mu 做网络 I/O  ·  P99 &lt; 100µs</text>
+<rect x="1030" y="490" width="500" height="96" rx="8" fill="#FFFFFF" stroke="#B3261E" stroke-width="1.4"/>
+<text x="1280" y="516" font-size="14" fill="#B3261E" text-anchor="middle" dominant-baseline="middle" font-weight="700">负载 stale / 目标不可达</text>
+<text x="1280" y="546" font-size="13.2" fill="#16203A" text-anchor="middle" dominant-baseline="middle">重选一次 → 仍失败则 fan-out 兜底</text>
+<polyline points="830,572 1030,540" fill="none" stroke="#B3261E" stroke-width="1.8" stroke-dasharray="6,4"/>
+<polygon points="1030.0,540.0 1020.8,546.0 1019.4,537.2" fill="#B3261E"/>
+<rect x="70" y="640" width="1460" height="220" rx="8" fill="#FFFFFF" stroke="#C9B2F2" stroke-width="1.3"/>
+<text x="94" y="670" font-size="15" fill="#6D3BD1" text-anchor="start" dominant-baseline="auto" font-weight="700">三条工程推论</text>
+<text x="94" y="706" font-size="13.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">① 新鲜度是可以牺牲的：负载快照落后 5s 只影响「选得优不优」，不影响「投不投得到」。</text>
+<text x="94" y="742" font-size="13.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">② 正确性不依赖最新数据：stale 时退回 fan-out，最多重复投递，绝不静默丢消息。</text>
+<text x="94" y="778" font-size="13.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">③ 频率决定架构：控制面可以捎带、批量、gob 复制；数据面只能读本地内存副本。</text>
+<text x="94" y="814" font-size="13.8" fill="#16203A" text-anchor="start" dominant-baseline="auto">④ 反例：若每次 PUBLISH 都 RPC 查一次各节点连接数，集群吞吐会被协调开销吃掉。</text>
+<rect x="40" y="916" width="1520" height="64" rx="9" fill="#F4EFFE" stroke="#6D3BD1" stroke-width="1.6"/>
+<rect x="40" y="916" width="7" height="64" rx="3" fill="#6D3BD1"/>
+<text x="64" y="948.0" font-size="15.8" fill="#6D3BD1" text-anchor="start" dominant-baseline="middle" font-weight="700">用数据新鲜度换决策可扩展性  ——  控制面慢而廉价，数据面快而纯粹</text>
+<text x="40" y="1004" font-size="12.6" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">GroveMQ · 负载均衡底层机制  |  控制面 / 数据面</text>
+<text x="1560" y="1004" font-size="12.6" fill="#5B6B87" text-anchor="end" dominant-baseline="middle">SVG / PNG</text>
+</svg>
