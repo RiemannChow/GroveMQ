@@ -994,6 +994,10 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 
 	var receivedDisconnectPacket bool // Track if we received a proper DISCONNECT packet
 	var keepAlive time.Duration
+	// Version negotiated by the CONNECT packet. Kept outside the read loop so
+	// error paths (e.g. keep-alive timeout, where readPacket returned no packet
+	// and pk is nil) can still encode a correctly versioned DISCONNECT.
+	var negotiatedVersion byte = 4
 	for {
 		// Set read deadline based on keep-alive
 		if keepAlive > 0 {
@@ -1011,8 +1015,9 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 				log.Printf("[INFO] Client %s timed out due to keep-alive. Closing connection.", clientID)
 				// Send DISCONNECT packet for timeout
 				resp := packets.Packet{
-					FixedHeader: packets.FixedHeader{Type: packets.Disconnect},
-					ReasonCode:  0x8E, // Keep Alive Timeout
+					FixedHeader:     packets.FixedHeader{Type: packets.Disconnect},
+					ProtocolVersion: negotiatedVersion,
+					ReasonCode:      0x8E, // Keep Alive Timeout
 				}
 				writePacket(conn, &resp)
 				return
@@ -1025,7 +1030,7 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 					// Send DISCONNECT packet for protocol violation
 					resp := packets.Packet{
 						FixedHeader:     packets.FixedHeader{Type: packets.Disconnect},
-						ProtocolVersion: pk.ProtocolVersion,
+						ProtocolVersion: negotiatedVersion,
 						ReasonCode:      0x82, // Protocol Error
 					}
 					writePacket(conn, &resp)
@@ -1055,6 +1060,7 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 
 		switch pk.FixedHeader.Type {
 		case packets.Connect:
+			negotiatedVersion = pk.ProtocolVersion
 			// SECURITY FIX: CVE-2017-7654 protection - validate CONNECT packet structure
 			// Check for basic structure validity
 			if pk.Connect.ClientIdentifier == "" && pk.Connect.UsernameFlag == false && pk.Connect.PasswordFlag == false && pk.Connect.WillFlag == false {
@@ -1585,8 +1591,9 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 			if pk.FixedHeader.Qos > 2 {
 				log.Printf("[ERROR] PUBLISH from client %s has invalid QoS %d. Protocol violation.", clientID, pk.FixedHeader.Qos)
 				resp := packets.Packet{
-					FixedHeader: packets.FixedHeader{Type: packets.Disconnect},
-					ReasonCode:  0x81, // Malformed Packet
+					FixedHeader:     packets.FixedHeader{Type: packets.Disconnect},
+					ProtocolVersion: pk.ProtocolVersion,
+					ReasonCode:      0x81, // Malformed Packet
 				}
 				writePacket(conn, &resp)
 				return
@@ -2792,6 +2799,11 @@ func writePacket(w io.Writer, pk *packets.Packet) error {
 		err = pk.PubcompEncode(&buf)
 	case packets.Unsuback:
 		err = pk.UnsubackEncode(&buf)
+	case packets.Disconnect:
+		// MQTT 5.0 server DISCONNECT carries a reason code and a property
+		// block; MQTT 3.1/3.1.1 is just the two-byte fixed header. Without this
+		// case every server-initiated DISCONNECT silently failed to be written.
+		err = pk.DisconnectEncode(&buf)
 	default:
 		return fmt.Errorf("unsupported packet type for writing: %v", pk.FixedHeader.Type)
 	}

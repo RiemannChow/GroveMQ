@@ -24,6 +24,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/mochi-mqtt/server/v2/packets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/turtacn/grovemq/pkg/acl"
@@ -645,4 +646,55 @@ func TestBroker_SessionUsesNegotiatedProtocolVersion(t *testing.T) {
 		"MQTT 5.0 PUBLISH must start its variable header properties with Property Length 0")
 	require.Equal(t, byte('X'), v5[propertyLengthOffset+1],
 		"payload must follow the MQTT 5.0 property length")
+}
+
+// TestWritePacket_Disconnect guards the encoder used for server-initiated
+// DISCONNECT (keep-alive timeout, malformed packet, protocol error). Before the
+// Disconnect case was added, writePacket returned an error and no byte ever
+// reached the client.
+func TestWritePacket_Disconnect(t *testing.T) {
+	tests := []struct {
+		name    string
+		version byte
+		want    []byte
+	}{
+		{
+			name:    "MQTT 5.0 with reason code and property length",
+			version: 5,
+			// 0xE0 DISCONNECT, remaining length 2, reason 0x8E, properties 0x00.
+			want: []byte{0xE0, 0x02, 0x8E, 0x00},
+		},
+		{
+			name:    "MQTT 3.1.1 has no reason code",
+			version: 4,
+			want:    []byte{0xE0, 0x00},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// writePacket keys its per-connection lock on a net.Conn, so use a
+			// pipe rather than a bare bytes.Buffer.
+			serverConn, clientConn := net.Pipe()
+			defer serverConn.Close()
+			defer clientConn.Close()
+
+			errCh := make(chan error, 1)
+			go func() {
+				pk := &packets.Packet{
+					FixedHeader:     packets.FixedHeader{Type: packets.Disconnect},
+					ProtocolVersion: tt.version,
+					ReasonCode:      0x8E, // Keep Alive Timeout
+				}
+				errCh <- writePacket(serverConn, pk)
+			}()
+
+			require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(3*time.Second)))
+			got := make([]byte, 16)
+			n, err := clientConn.Read(got)
+			require.NoError(t, err)
+			require.NoError(t, <-errCh)
+			assert.Equal(t, tt.want, got[:n])
+		})
+	}
 }
