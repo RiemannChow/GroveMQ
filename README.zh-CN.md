@@ -118,6 +118,13 @@ docker compose -f docker-compose-cluster.yaml up -d
 docker compose -f docker-compose-cluster.yaml down
 ```
 
+**持久化状态**：设置 `GROVEMQ_DATA_DIR` 指向一个可写目录，即可持久化会话与保留消息，并启用集群状态复制。每个节点的数据存放在 `<GROVEMQ_DATA_DIR>/<NODE_ID>` 下。本地集群脚本、Docker Compose 文件与 Kubernetes StatefulSet 均已默认配置（分别为 `./data`、`/data` 并挂载每节点独立卷）。未设置时全部状态保存在内存中，重启即丢失。
+
+```sh
+# 单节点持久化运行
+GROVEMQ_DATA_DIR=./data ./bin/grovemq
+```
+
 更多集群测试资料：
 - [集群测试指南](docs/testing/CLUSTER_TESTING_GUIDE.md) —— 部署与测试步骤
 - [E2E 测试报告](docs/testing/CLUSTER_E2E_TEST_REPORT.md) —— 详细结果与问题修复记录

@@ -118,6 +118,18 @@ docker compose -f docker-compose-cluster.yaml up -d
 docker compose -f docker-compose-cluster.yaml down
 ```
 
+**Durable state**: set `GROVEMQ_DATA_DIR` to a writable directory to persist
+sessions and retained messages and to enable cluster state replication. Each
+node stores its data under `<GROVEMQ_DATA_DIR>/<NODE_ID>`. The local cluster
+script, the Docker Compose file and the Kubernetes StatefulSet all set it by
+default (`./data`, `/data` with a per-node volume). Without it, all state is
+in-memory and is lost on restart.
+
+```sh
+# Single-node run with durable state
+GROVEMQ_DATA_DIR=./data ./bin/grovemq
+```
+
 For detailed information about cluster testing, see:
 - [Cluster Testing Guide](docs/testing/CLUSTER_TESTING_GUIDE.md) - How to deploy and test
 - [E2E Test Report](docs/testing/CLUSTER_E2E_TEST_REPORT.md) - Detailed test results and bug fixes

@@ -13,6 +13,8 @@ services:
       - MQTT_PORT=:1883
       - GRPC_PORT=:8081
       - METRICS_PORT=:8082
+      # Enables durable sessions/retained state and cluster state replication.
+      - GROVEMQ_DATA_DIR=/data
     ports:
       - "1883:1883"  # MQTT
       - "8081:8081"  # gRPC
@@ -21,6 +23,8 @@ services:
     networks:
       grovemq_cluster:
         ipv4_address: 172.20.0.11
+    volumes:
+      - grovemq-node1-data:/data
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "1883"]
       interval: 10s
@@ -40,6 +44,8 @@ services:
       - GRPC_PORT=:8081
       - METRICS_PORT=:8082
       - PEER_NODES=grovemq-node1:8081
+      # Enables durable sessions/retained state and cluster state replication.
+      - GROVEMQ_DATA_DIR=/data
     ports:
       - "1884:1883"  # MQTT
       - "8083:8081"  # gRPC
@@ -48,6 +54,8 @@ services:
     networks:
       grovemq_cluster:
         ipv4_address: 172.20.0.12
+    volumes:
+      - grovemq-node2-data:/data
     depends_on:
       - grovemq-node1
     healthcheck:
@@ -69,6 +77,8 @@ services:
       - GRPC_PORT=:8081
       - METRICS_PORT=:8082
       - PEER_NODES=grovemq-node1:8081,grovemq-node2:8081
+      # Enables durable sessions/retained state and cluster state replication.
+      - GROVEMQ_DATA_DIR=/data
     ports:
       - "1885:1883"  # MQTT
       - "8085:8081"  # gRPC
@@ -77,6 +87,8 @@ services:
     networks:
       grovemq_cluster:
         ipv4_address: 172.20.0.13
+    volumes:
+      - grovemq-node3-data:/data
     depends_on:
       - grovemq-node1
       - grovemq-node2
@@ -93,3 +105,10 @@ networks:
       driver: default
       config:
         - subnet: 172.20.0.0/16
+
+# One volume per node: bbolt uses an exclusive file lock, so nodes must not
+# share a data directory.
+volumes:
+  grovemq-node1-data:
+  grovemq-node2-data:
+  grovemq-node3-data:
