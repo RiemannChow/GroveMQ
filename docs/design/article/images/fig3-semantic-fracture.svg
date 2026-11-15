@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1020" viewBox="0 0 1600 1020" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Arial Unicode MS, sans-serif">
+<rect width="1600" height="1020" fill="#F6F8FC"/>
+<rect x="0" y="0" width="1600" height="100" rx="8" fill="#FFFFFF"/>
+<rect x="0" y="0" width="10" height="100" rx="8" fill="#6D3BD1"/>
+<text x="40" y="40" font-size="25" fill="#16203A" text-anchor="start" dominant-baseline="auto" font-weight="700">图 3  跨层语义断裂：一个字符串，两种解释</text>
+<text x="40" y="76" font-size="14" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">跨节点 $share 不投递的根因，不是匹配算法，而是结构化信息在跨层传递时被降维成字符串</text>
+<line x1="40" y1="96" x2="1560" y2="96" stroke="#C9D4E3" stroke-width="1.2"/>
+<rect x="490" y="128" width="620" height="76" rx="10" fill="#16203A"/>
+<text x="800" y="166" font-size="24" fill="#FFFFFF" text-anchor="middle" dominant-baseline="middle" font-weight="700" font-family="ui-monospace, Menlo, monospace">$share/g1/sensors/temp</text>
+<text x="800" y="222" font-size="13.4" fill="#5B6B87" text-anchor="middle" dominant-baseline="middle">SUBSCRIBE 里的 topic filter（同一个字符串，被两层各自消费）</text>
+<polyline points="640,204 400,274" fill="none" stroke="#07835D" stroke-width="2.2"/>
+<polygon points="400.0,274.0 408.4,266.9 410.9,275.5" fill="#07835D"/>
+<polyline points="960,204 1200,274" fill="none" stroke="#B3261E" stroke-width="2.2"/>
+<polygon points="1200.0,274.0 1189.1,275.5 1191.6,266.9" fill="#B3261E"/>
+<rect x="40" y="280" width="740" height="470" rx="9" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.5"/>
+<rect x="40" y="280" width="740" height="38" rx="9" fill="#07835D"/>
+<rect x="40" y="308" width="740" height="10" rx="0" fill="#07835D"/>
+<text x="54" y="299.0" font-size="16" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">A · topic.Store（本地，正确）</text>
+<text x="54" y="340" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">ParseSharedFilter() 结构化解析</text>
+<text x="54" y="374" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">  → group = &quot;g1&quot;</text>
+<text x="54" y="408" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">  → topic = &quot;sensors/temp&quot;</text>
+<text x="54" y="442" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">写入 sharedSubscriptions[group] → Mailboxes</text>
+<text x="54" y="476" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">GetSubscribers() 命中后按 NextIndex 原子轮询选 1 个</text>
+<text x="54" y="510" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">结果：单节点内共享组语义成立 ✔</text>
+<rect x="600" y="296" width="150" height="26" rx="6" fill="#FFFFFF" stroke="#07835D" stroke-width="1.2"/>
+<text x="675.0" y="309" font-size="12.6" fill="#07835D" text-anchor="middle" dominant-baseline="middle" font-weight="700">结构化</text>
+<rect x="820" y="280" width="740" height="470" rx="9" fill="#FFF5F4" stroke="#F3B8B4" stroke-width="1.5"/>
+<rect x="820" y="280" width="740" height="38" rx="9" fill="#B3261E"/>
+<rect x="820" y="308" width="740" height="10" rx="0" fill="#B3261E"/>
+<text x="834" y="299.0" font-size="16" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">B · cluster.remoteRoutes（跨节点，失效）</text>
+<text x="834" y="340" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">RegisterRoute(filter) 原样写入 map 的 key</text>
+<text x="834" y="374" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">  remoteRoutes[&quot;$share/g1/sensors/temp&quot;] = {N1}</text>
+<text x="834" y="408" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">PUBLISH &quot;sensors/temp&quot; → routeTopicMatches()</text>
+<text x="834" y="442" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">  tLevels = 2   ·   fLevels = 3   →   长度不等</text>
+<text x="834" y="476" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">  → return false（永不命中）</text>
+<text x="834" y="510" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">结果：其它节点永远收不到转发 ✘</text>
+<rect x="1380" y="296" width="150" height="26" rx="6" fill="#FFFFFF" stroke="#B3261E" stroke-width="1.2"/>
+<text x="1455.0" y="309" font-size="12.6" fill="#B3261E" text-anchor="middle" dominant-baseline="middle" font-weight="700">类型擦除</text>
+<rect x="40" y="772" width="1520" height="118" rx="9" fill="#FFFBEB" stroke="#F5C86B" stroke-width="1.4"/>
+<text x="64" y="800" font-size="15" fill="#C2740A" text-anchor="start" dominant-baseline="auto" font-weight="700">本质</text>
+<text x="64" y="832" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">同一份数据在协议边界上被「擦除类型」：topic.Store 知道它是 (group, topic)，cluster 只知道它是 string。</text>
+<text x="64" y="862" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">丢失的 group 维度恰好是共享订阅的全部语义 —— 修复方式是把它重新结构化（RouteKey{Group, Filter}），不是放宽匹配。</text>
+<rect x="40" y="916" width="1520" height="64" rx="9" fill="#FFF5F4" stroke="#B3261E" stroke-width="1.6"/>
+<rect x="40" y="916" width="7" height="64" rx="3" fill="#B3261E"/>
+<text x="64" y="948.0" font-size="15.2" fill="#B3261E" text-anchor="start" dominant-baseline="middle" font-weight="700">跨层传递结构化信息时，必须显式携带 schema；靠「约定对方会解析」必然产生语义断裂</text>
+<text x="40" y="1004" font-size="12.6" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">GroveMQ · 负载均衡底层机制  |  语义断裂</text>
+<text x="1560" y="1004" font-size="12.6" fill="#5B6B87" text-anchor="end" dominant-baseline="middle">SVG / PNG</text>
+</svg>

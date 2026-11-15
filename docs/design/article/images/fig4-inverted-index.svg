@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1020" viewBox="0 0 1600 1020" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Arial Unicode MS, sans-serif">
+<rect width="1600" height="1020" fill="#F6F8FC"/>
+<rect x="0" y="0" width="1600" height="100" rx="8" fill="#FFFFFF"/>
+<rect x="0" y="0" width="10" height="100" rx="8" fill="#6D3BD1"/>
+<text x="40" y="40" font-size="25" fill="#16203A" text-anchor="start" dominant-baseline="auto" font-weight="700">图 4  路由表是倒排索引，选点是 posting list 上的确定性纯函数</text>
+<text x="40" y="76" font-size="14" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">普通订阅与共享订阅的差别不在性能策略，而在订阅语义决定的集合运算</text>
+<line x1="40" y1="96" x2="1560" y2="96" stroke="#C9D4E3" stroke-width="1.2"/>
+<rect x="40" y="130" width="620" height="470" rx="9" fill="#ECFEFF" stroke="#A5E4F2" stroke-width="1.5"/>
+<rect x="40" y="130" width="620" height="38" rx="9" fill="#0E7490"/>
+<rect x="40" y="158" width="620" height="10" rx="0" fill="#0E7490"/>
+<text x="54" y="149.0" font-size="16" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">remoteRoutes（每节点一份本地副本）</text>
+<text x="54" y="190" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">倒排索引：filter → posting list（节点集合）</text>
+<text x="54" y="226" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto"></text>
+<text x="54" y="262" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">  sensors/#                → [N1, N2, N3]</text>
+<text x="54" y="298" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">  $share/g1/sensors/#      → [N1, N2, N3]</text>
+<text x="54" y="334" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">  devices/+/telemetry      → [N1, N3]</text>
+<text x="54" y="370" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto"></text>
+<text x="54" y="406" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">由 ReplicateState(&quot;routes&quot;) gob 复制</text>
+<text x="54" y="442" font-size="14.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">→ 所有节点看到同一份 posting list</text>
+<rect x="700" y="130" width="860" height="222" rx="9" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.5"/>
+<rect x="700" y="130" width="860" height="36" rx="9" fill="#2563EB"/>
+<rect x="700" y="156" width="860" height="10" rx="0" fill="#2563EB"/>
+<text x="714" y="148.0" font-size="16" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">普通订阅 · 遍历整个 posting list</text>
+<text x="714" y="188" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">语义：所有匹配订阅者都要收到（集合广播）</text>
+<text x="714" y="219" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">操作：for n in L → ForwardPublish(n)   → 3 次转发</text>
+<text x="714" y="250" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">结果：3 个订阅者各收 1 条 = 3 次投递 ✔ 正确</text>
+<text x="714" y="281" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">结论：这里做「均衡」是错的，会丢消息</text>
+<rect x="700" y="372" width="860" height="228" rx="9" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.5"/>
+<rect x="700" y="372" width="860" height="36" rx="9" fill="#07835D"/>
+<rect x="700" y="398" width="860" height="10" rx="0" fill="#07835D"/>
+<text x="714" y="390.0" font-size="16" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">共享订阅 · 在 posting list 上选一个</text>
+<text x="714" y="430" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">语义：同组恰好一个成员收到（等价类内互斥选择）</text>
+<text x="714" y="461" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">操作：n = Select(group, topic, L, load)   → 1 次转发</text>
+<text x="714" y="492" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">目标节点再按 NextIndex 组内轮询 → 1 个 mailbox</text>
+<text x="714" y="523" font-size="13.6" fill="#16203A" text-anchor="start" dominant-baseline="auto">结果：全集群恰好 1 次投递 ✔ 正确</text>
+<polyline points="660,230 700,230" fill="none" stroke="#2563EB" stroke-width="2.2"/>
+<polygon points="700.0,230.0 690.0,234.5 690.0,225.5" fill="#2563EB"/>
+<polyline points="660,480 700,480" fill="none" stroke="#07835D" stroke-width="2.2"/>
+<polygon points="700.0,480.0 690.0,484.5 690.0,475.5" fill="#07835D"/>
+<rect x="40" y="626" width="1520" height="264" rx="9" fill="#F4EFFE" stroke="#C9B2F2" stroke-width="1.4"/>
+<text x="64" y="656" font-size="15.5" fill="#6D3BD1" text-anchor="start" dominant-baseline="auto" font-weight="700">确定性从哪里来</text>
+<text x="64" y="690" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">① 同一份 posting list：靠控制面复制（gob / ReplicateState），不是各自查库</text>
+<text x="64" y="727" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">② 同一个纯函数：Select 无 I/O、无随机、无本地可变状态（唯一例外是原子游标）</text>
+<text x="64" y="764" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">③ 平局必须打破且可复现：按 nodeID 字典序，否则多节点各自决策会不一致</text>
+<text x="64" y="801" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">④ 组级粘性：按 group 分桶而非全局游标，成员不变时始终落到同一节点</text>
+<text x="64" y="838" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">⑤ epoch：成员变更窗口内的不一致可观测，失败退回 fan-out（宁可重复不可丢失）</text>
+<rect x="40" y="916" width="1520" height="64" rx="9" fill="#F4EFFE" stroke="#6D3BD1" stroke-width="1.6"/>
+<rect x="40" y="916" width="7" height="64" rx="3" fill="#6D3BD1"/>
+<text x="64" y="948.0" font-size="15.2" fill="#6D3BD1" text-anchor="start" dominant-baseline="middle" font-weight="700">选点 = 在倒排索引的 posting list 上做一次确定性纯函数  ——  确定性来自「同一份输入 + 同一个纯函数」</text>
+<text x="40" y="1004" font-size="12.6" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">GroveMQ · 负载均衡底层机制  |  倒排索引</text>
+<text x="1560" y="1004" font-size="12.6" fill="#5B6B87" text-anchor="end" dominant-baseline="middle">SVG / PNG</text>
+</svg>

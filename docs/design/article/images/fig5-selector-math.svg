@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1020" viewBox="0 0 1600 1020" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Arial Unicode MS, sans-serif">
+<rect width="1600" height="1020" fill="#F6F8FC"/>
+<rect x="0" y="0" width="1600" height="100" rx="8" fill="#FFFFFF"/>
+<rect x="0" y="0" width="10" height="100" rx="8" fill="#6D3BD1"/>
+<text x="40" y="40" font-size="25" fill="#16203A" text-anchor="start" dominant-baseline="auto" font-weight="700">图 5  三种选点策略，共享同一个数学本质</text>
+<text x="40" y="76" font-size="14" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">策略可以换，但「纯函数 + 确定性 + 组级粘性」三条约束不能换</text>
+<line x1="40" y1="96" x2="1560" y2="96" stroke="#C9D4E3" stroke-width="1.2"/>
+<rect x="40" y="130" width="480" height="470" rx="9" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.5"/>
+<rect x="40" y="130" width="480" height="40" rx="9" fill="#2563EB"/>
+<rect x="40" y="160" width="480" height="10" rx="0" fill="#2563EB"/>
+<text x="54" y="150.0" font-size="16" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">Round-Robin</text>
+<rect x="56" y="190" width="448" height="62" rx="7" fill="#FFFFFF" stroke="#93C5FD" stroke-width="1.2"/>
+<text x="280" y="221" font-size="13.6" fill="#2563EB" text-anchor="middle" dominant-baseline="middle" font-weight="700" font-family="ui-monospace, Menlo, monospace">idx = (atomic.AddUint32(&amp;c,1) - 1) mod |L|</text>
+<text x="60" y="280" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 按 group 分桶的独立游标 → 组级粘性</text>
+<text x="60" y="322" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 单调递增 + 取模，uint32 自然回绕</text>
+<text x="60" y="364" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 原子加法而非互斥锁：读多写少的热路径</text>
+<text x="60" y="406" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 无负载数据时的默认策略</text>
+<rect x="560" y="130" width="480" height="470" rx="9" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.5"/>
+<rect x="560" y="130" width="480" height="40" rx="9" fill="#07835D"/>
+<rect x="560" y="160" width="480" height="10" rx="0" fill="#07835D"/>
+<text x="574" y="150.0" font-size="16" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">Least-Connections</text>
+<rect x="576" y="190" width="448" height="62" rx="7" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.2"/>
+<text x="800" y="221" font-size="13.6" fill="#07835D" text-anchor="middle" dominant-baseline="middle" font-weight="700" font-family="ui-monospace, Menlo, monospace">argmin_i ( conn_i / max_i )</text>
+<text x="580" y="280" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 归一化后再比较，避免节点容量差异</text>
+<text x="580" y="322" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 同分按 nodeID 字典序打破平局</text>
+<text x="580" y="364" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 依赖 NodeLoadTable 的预取快照</text>
+<text x="580" y="406" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 长连接下连接数 ≠ 消息量 → 会失真</text>
+<rect x="1080" y="130" width="480" height="470" rx="9" fill="#F4EFFE" stroke="#C9B2F2" stroke-width="1.5"/>
+<rect x="1080" y="130" width="480" height="40" rx="9" fill="#6D3BD1"/>
+<rect x="1080" y="160" width="480" height="10" rx="0" fill="#6D3BD1"/>
+<text x="1094" y="150.0" font-size="16" fill="#FFFFFF" text-anchor="start" dominant-baseline="middle" font-weight="700">Consistent-Hash</text>
+<rect x="1096" y="190" width="448" height="62" rx="7" fill="#FFFFFF" stroke="#C9B2F2" stroke-width="1.2"/>
+<text x="1320" y="221" font-size="13.6" fill="#6D3BD1" text-anchor="middle" dominant-baseline="middle" font-weight="700" font-family="ui-monospace, Menlo, monospace">h( group + &quot;/&quot; + topic ) mod N</text>
+<text x="1100" y="280" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 组级粘性由哈希天然保证，无状态</text>
+<text x="1100" y="322" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 成员集合稳定时结果不抖动</text>
+<text x="1100" y="364" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 为后续 topic 分片 / 分区预留</text>
+<text x="1100" y="406" font-size="13.2" fill="#16203A" text-anchor="start" dominant-baseline="auto">· 节点增减时需有界负载一致性哈希</text>
+<rect x="40" y="626" width="1520" height="264" rx="9" fill="#FFFBEB" stroke="#F5C86B" stroke-width="1.4"/>
+<text x="64" y="656" font-size="15.5" fill="#C2740A" text-anchor="start" dominant-baseline="auto" font-weight="700">为什么必须是纯函数</text>
+<text x="64" y="690" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">转发层在 routePublish 热路径上：一次 PUBLISH 一次 Select，禁 RPC、禁持锁做网络 I/O。</text>
+<text x="64" y="727" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">多节点可能同时为同一 group 决策；只要输入相同、函数确定，结果就一致，无需协调。</text>
+<text x="64" y="764" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">任何「临场查一下别的节点」都会把控制面的延迟与失败面带进数据面。</text>
+<text x="64" y="801" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">唯一允许的可变状态是按 group 分桶的原子游标 —— 它只影响分布，不影响正确性。</text>
+<text x="64" y="838" font-size="14.0" fill="#16203A" text-anchor="start" dominant-baseline="auto">失败 / 负载 stale 时不追求最优解：退回 fan-out，用「可能重复」换「绝不丢失」。</text>
+<rect x="40" y="916" width="1520" height="64" rx="9" fill="#FFFBEB" stroke="#C2740A" stroke-width="1.6"/>
+<rect x="40" y="916" width="7" height="64" rx="3" fill="#C2740A"/>
+<text x="64" y="948.0" font-size="15.2" fill="#C2740A" text-anchor="start" dominant-baseline="middle" font-weight="700">策略决定「选谁」，约束决定「能不能正确」：纯函数 · 无 I/O · 确定性 · 组级粘性</text>
+<text x="40" y="1004" font-size="12.6" fill="#5B6B87" text-anchor="start" dominant-baseline="auto">GroveMQ · 负载均衡底层机制  |  选点数学</text>
+<text x="1560" y="1004" font-size="12.6" fill="#5B6B87" text-anchor="end" dominant-baseline="middle">SVG / PNG</text>
+</svg>
