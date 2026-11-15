@@ -126,8 +126,11 @@ func main() {
 	// --- Setup Broker and Cluster Manager ---
 	// The broker needs to be created first to pass its publish function to the manager.
 	var b *broker.Broker
-	// For local deployment, use localhost as the address. In production/K8s, this should use the actual hostname.
-	nodeAddress := fmt.Sprintf("localhost%s", cfg.Broker.GRPCPort)
+	// The address is sent to peers in Join requests so they can dial us back.
+	// It must be reachable from other nodes, which "localhost" never is in a
+	// container or multi-host deployment; deployments set NODE_ADVERTISE_ADDR.
+	nodeAddress := resolveNodeAdvertiseAddr(cfg.Broker.GRPCPort)
+	log.Printf("Node advertise address: %s", nodeAddress)
 	clusterMgr := cluster.NewManager(nodeID, nodeAddress, func(topic string, payload []byte, qos byte) {
 		if b != nil {
 			b.RouteToLocalSubscribersWithQoS(topic, payload, qos)
@@ -407,6 +410,17 @@ func connectToPeers(ctx context.Context, mgr *cluster.Manager, peerNodes string)
 			}
 		}
 	}
+}
+
+// resolveNodeAdvertiseAddr returns the address this node advertises to peers in
+// Join requests. NODE_ADVERTISE_ADDR must be set to a dialable host:port in any
+// container or multi-host deployment; the localhost fallback is only suitable
+// for a single-host development cluster.
+func resolveNodeAdvertiseAddr(grpcPort string) string {
+	if addr := os.Getenv("NODE_ADVERTISE_ADDR"); addr != "" {
+		return addr
+	}
+	return fmt.Sprintf("localhost%s", grpcPort)
 }
 
 // parsePeerEntry splits a peer entry of the form "id=addr" or "host:port" into a

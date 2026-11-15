@@ -38,6 +38,15 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
+          # Stable per-pod identity. The Downward API gives the StatefulSet pod
+          # name, which must match the node ID used by peer discovery.
+          - name: NODE_ID
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          # Peers dial back the pod's headless-service DNS name, not localhost.
+          - name: NODE_ADVERTISE_ADDR
+            value: "$(NODE_ID).grovemq-headless:8081"
           # Enable durable sessions/retained state and cluster state replication.
           # Each pod gets its own PVC (bbolt takes an exclusive file lock).
           - name: GROVEMQ_DATA_DIR

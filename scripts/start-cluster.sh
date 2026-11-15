@@ -5,7 +5,8 @@
 # and CGO_ENABLED=0 automatically. Per-node ports/identity come from the env vars
 # that cmd/grovemq/main.go reads (NODE_ID, *_PORT, PEER_NODES).
 # GROVEMQ_DATA_DIR enables the durable session/retained store and cluster state
-# replication; each node writes to ./data/<NODE_ID>.
+# replication; each node writes to ./data/<NODE_ID>. NODE_ADVERTISE_ADDR is the
+# address a node tells its peers to dial back.
 
 set -e
 
@@ -34,6 +35,7 @@ GRPC_PORT=:8081 \
 METRICS_PORT=:8082 \
 DASHBOARD_PORT=:18083 \
 GROVEMQ_DATA_DIR=./data \
+NODE_ADVERTISE_ADDR=localhost:8081 \
 ./bin/grovemq > ./logs/node1.log 2>&1 &
 NODE1_PID=$!
 echo "Node1 started with PID: $NODE1_PID"
@@ -50,6 +52,7 @@ METRICS_PORT=:8084 \
 DASHBOARD_PORT=:18084 \
 PEER_NODES=localhost:8081 \
 GROVEMQ_DATA_DIR=./data \
+NODE_ADVERTISE_ADDR=localhost:8083 \
 ./bin/grovemq > ./logs/node2.log 2>&1 &
 NODE2_PID=$!
 echo "Node2 started with PID: $NODE2_PID"
@@ -66,6 +69,7 @@ METRICS_PORT=:8086 \
 DASHBOARD_PORT=:18085 \
 PEER_NODES=localhost:8081,localhost:8083 \
 GROVEMQ_DATA_DIR=./data \
+NODE_ADVERTISE_ADDR=localhost:8085 \
 ./bin/grovemq > ./logs/node3.log 2>&1 &
 NODE3_PID=$!
 echo "Node3 started with PID: $NODE3_PID"

@@ -130,6 +130,13 @@ in-memory and is lost on restart.
 GROVEMQ_DATA_DIR=./data ./bin/grovemq
 ```
 
+**Peer addressing**: in a container or multi-host deployment each node must
+advertise an address its peers can dial back. Set `NODE_ADVERTISE_ADDR` (e.g.
+`grovemq-node2:8081` in Compose, `$(NODE_ID).grovemq-headless:8081` in
+Kubernetes). The default `localhost:<grpc port>` is only correct for a
+single-host development cluster; the shipped Compose and StatefulSet manifests
+set it explicitly.
+
 For detailed information about cluster testing, see:
 - [Cluster Testing Guide](docs/testing/CLUSTER_TESTING_GUIDE.md) - How to deploy and test
 - [E2E Test Report](docs/testing/CLUSTER_E2E_TEST_REPORT.md) - Detailed test results and bug fixes

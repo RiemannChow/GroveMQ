@@ -125,6 +125,8 @@ docker compose -f docker-compose-cluster.yaml down
 GROVEMQ_DATA_DIR=./data ./bin/grovemq
 ```
 
+**对等节点地址**：在容器或多主机部署中，每个节点都必须通告一个对等节点可回连的地址，需设置 `NODE_ADVERTISE_ADDR`（例如 Compose 中为 `grovemq-node2:8081`，Kubernetes 中为 `$(NODE_ID).grovemq-headless:8081`）。默认的 `localhost:<gRPC 端口>` 仅适用于单机开发集群；仓库中的 Compose 与 StatefulSet 清单均已显式配置。
+
 更多集群测试资料：
 - [集群测试指南](docs/testing/CLUSTER_TESTING_GUIDE.md) —— 部署与测试步骤
 - [E2E 测试报告](docs/testing/CLUSTER_E2E_TEST_REPORT.md) —— 详细结果与问题修复记录
