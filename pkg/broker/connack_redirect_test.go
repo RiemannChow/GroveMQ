@@ -17,7 +17,14 @@ func TestConnackRedirectWireFormat(t *testing.T) {
 		ReasonCode:      0x9C,
 		ProtocolVersion: 5,
 	}
-	pk.Properties.ServerReference = "grovemq-mqtt:1883?redirect=deadbeef&ts=1&node=n2"
+	// The broker emits a bare endpoint here; the one-hop credential travels as
+	// CONNACK user properties (see admission_wiring_test.go).
+	pk.Properties.ServerReference = "grovemq-mqtt:1883"
+	pk.Properties.User = []packets.UserProperty{
+		{Key: "grovemq-redirect-token", Val: "deadbeef"},
+		{Key: "grovemq-redirect-node", Val: "n2"},
+		{Key: "grovemq-redirect-ts", Val: "1"},
+	}
 
 	var buf bytes.Buffer
 	if err := pk.ConnackEncode(&buf); err != nil {

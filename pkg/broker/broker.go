@@ -41,6 +41,7 @@ import (
 	"github.com/turtacn/grovemq/pkg/admin"
 	"github.com/turtacn/grovemq/pkg/auth"
 	"github.com/turtacn/grovemq/pkg/auth/x509"
+	"github.com/turtacn/grovemq/pkg/balancer"
 	"github.com/turtacn/grovemq/pkg/blacklist"
 	"github.com/turtacn/grovemq/pkg/cluster"
 	"github.com/turtacn/grovemq/pkg/connector"
@@ -132,6 +133,13 @@ type Broker struct {
 	// disables Mode B entirely. Keeping it a plain func avoids importing
 	// pkg/balancer here.
 	AdmissionFunc func(clientID string, protoVer byte) (reasonCode byte, serverRef string)
+
+	// RedirectTokenFunc validates the one-hop credential carried in the
+	// CONNECT user properties of a client that was redirected here. A true
+	// result forces local acceptance: the broker skips AdmissionFunc so a
+	// client can never be bounced between hot nodes. Nil disables the check;
+	// the per-node cooldown in pkg/balancer then remains the loop guard.
+	RedirectTokenFunc func(clientID string, props map[string]string) bool
 
 	// activeConns is the current number of live connections, used to enforce
 	// MaxConnections. Accessed atomically.
@@ -803,12 +811,16 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 
 			// Access-layer admission (design §6.2): evaluated AFTER
 			// authentication, BEFORE session creation. MQTT 5.0 only.
+			// A client arriving with a valid one-hop redirect credential is
+			// force-accepted locally, closing the redirect loop.
 			var serverRef string
-			if b.AdmissionFunc != nil && connackCode == packets.CodeSuccess.Code {
+			var redirectProps []packets.UserProperty
+			redirected := b.RedirectTokenFunc != nil && b.RedirectTokenFunc(clientID, connectUserProperties(pk))
+			if !redirected && b.AdmissionFunc != nil && connackCode == packets.CodeSuccess.Code {
 				if code, ref := b.AdmissionFunc(clientID, pk.ProtocolVersion); code != 0 {
 					connackCode = code
-					serverRef = ref
-					log.Printf("[INFO] Redirecting TLS client %s to %s (0x%02x)", clientID, ref, code)
+					serverRef, redirectProps = splitAdmissionRef(ref)
+					log.Printf("[INFO] Redirecting TLS client %s to %s (0x%02x)", clientID, serverRef, code)
 				}
 			}
 
@@ -824,8 +836,11 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 			resp.ProtocolVersion = pk.ProtocolVersion
 
 			if serverRef != "" {
-				// mochi-mqtt encodes PropServerReference (28) for us.
+				// mochi-mqtt encodes PropServerReference (28) and the user
+				// properties for us. The reference is a bare endpoint; the
+				// one-hop credential travels as user properties instead.
 				resp.Properties.ServerReference = serverRef
+				resp.Properties.User = append(resp.Properties.User, redirectProps...)
 			}
 
 			// Set MQTT 5.0 properties in CONNACK only on successful auth.
@@ -1243,12 +1258,16 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 			// Access-layer admission (design §6.2): AFTER authentication,
 			// BEFORE session creation. A redirect must not consume a
 			// MaxConnections slot, so it is decided before the cap check.
+			// A client arriving with a valid one-hop redirect credential is
+			// force-accepted locally, closing the redirect loop.
 			var serverRef string
-			if b.AdmissionFunc != nil && connackCode == packets.CodeSuccess.Code {
+			var redirectProps []packets.UserProperty
+			redirected := b.RedirectTokenFunc != nil && b.RedirectTokenFunc(connectClientID, connectUserProperties(pk))
+			if !redirected && b.AdmissionFunc != nil && connackCode == packets.CodeSuccess.Code {
 				if code, ref := b.AdmissionFunc(connectClientID, pk.ProtocolVersion); code != 0 {
 					connackCode = code
-					serverRef = ref
-					log.Printf("[INFO] Redirecting client %s to %s (0x%02x)", connectClientID, ref, code)
+					serverRef, redirectProps = splitAdmissionRef(ref)
+					log.Printf("[INFO] Redirecting client %s to %s (0x%02x)", connectClientID, serverRef, code)
 				}
 			}
 
@@ -1284,8 +1303,11 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 			resp.ProtocolVersion = pk.ProtocolVersion
 
 			if serverRef != "" {
-				// mochi-mqtt encodes PropServerReference (28) for us.
+				// mochi-mqtt encodes PropServerReference (28) and the user
+				// properties for us. The reference is a bare endpoint; the
+				// one-hop credential travels as user properties instead.
 				resp.Properties.ServerReference = serverRef
+				resp.Properties.User = append(resp.Properties.User, redirectProps...)
 			}
 
 			// Set MQTT 5.0 properties in CONNACK only on successful auth.
@@ -2793,6 +2815,43 @@ func (b *Broker) localLoad() cluster.NodeLoad {
 		Connections:    conns,
 		MaxConnections: int64(b.MaxConnections),
 		UnixNano:       time.Now().UnixNano(),
+	}
+}
+
+// connectUserProperties flattens the CONNECT user properties into a map so the
+// redirect-token hook can look up the one-hop credential without depending on
+// the concrete packet library outside this package (design §6.2).
+func connectUserProperties(pk *packets.Packet) map[string]string {
+	out := make(map[string]string, len(pk.Properties.User))
+	for _, u := range pk.Properties.User {
+		out[u.Key] = u.Val
+	}
+	return out
+}
+
+// splitAdmissionRef converts the admission controller's Server Reference into
+// a clean endpoint plus CONNACK user properties.
+//
+// The controller packs the one-hop token into the reference's query string so
+// that ParseServerRef can round-trip it. MQTT 5.0 requires PropServerReference
+// to be a connectable endpoint, so a URI with "?redirect=..." must never reach
+// the client as a server reference: the broker strips it here and re-attaches
+// the credential as user properties, which a cooperating client copies into
+// its next CONNECT (see RedirectTokenFunc).
+func splitAdmissionRef(ref string) (string, []packets.UserProperty) {
+	if ref == "" {
+		return "", nil
+	}
+	endpoint, token, nodeID, ts, ok := balancer.ParseServerRef(ref)
+	if !ok {
+		// Already a plain endpoint (or an unknown format): forward verbatim
+		// rather than dropping a legitimate Server Reference.
+		return ref, nil
+	}
+	return endpoint, []packets.UserProperty{
+		{Key: balancer.RedirectTokenProperty, Val: token},
+		{Key: balancer.RedirectNodeProperty, Val: nodeID},
+		{Key: balancer.RedirectTimeProperty, Val: strconv.FormatInt(ts, 10)},
 	}
 }
 
