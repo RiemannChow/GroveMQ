@@ -51,6 +51,24 @@ spec:
           # Each pod gets its own PVC (bbolt takes an exclusive file lock).
           - name: GROVEMQ_DATA_DIR
             value: /data
+          # --- Load balancing (docs/design/LOAD_BALANCING.md §6.2) ---
+          # "l4" uses k8s/service.yaml; "redirect"/"both" additionally enable
+          # the MQTT 5.0 CONNACK 0x9C handoff. MQTT_ADVERTISE_ADDR must be an
+          # endpoint reachable by CLIENTS, not the internal gRPC address.
+          - name: GROVEMQ_ACCESS_LB
+            value: "l4"
+          - name: MQTT_ADVERTISE_ADDR
+            value: "grovemq-mqtt:1883"
+          # Forwarding-plane policy: "fanout" is the rolling-upgrade-safe
+          # baseline; "single" enables cross-node shared-group single-target.
+          - name: GROVEMQ_SHARED_ROUTE_POLICY
+            value: "fanout"
+          - name: GROVEMQ_LB_STRATEGY
+            value: "round_robin"
+          # A shared HMAC secret is required when GROVEMQ_ACCESS_LB=redirect:
+          # - name: GROVEMQ_LB_SECRET
+          #   valueFrom:
+          #     secretKeyRef: { name: grovemq-lb, key: secret }
         volumeMounts:
         - name: data
           mountPath: /data

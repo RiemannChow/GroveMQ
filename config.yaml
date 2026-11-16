@@ -107,3 +107,13 @@ broker:
       # points:
       #   - on_client_connected
       #   - on_message_publish
+  # --- Load balancing (docs/design/LOAD_BALANCING.md) ---
+  # All fields are optional; omitted values fall back to the same built-in
+  # defaults in DefaultConfig(). The defaults introduce no new behaviour,
+  # which keeps rolling upgrades safe.
+  balance:
+    access_lb: off                 # off | l4 | redirect | both
+    mqtt_advertise_addr: ""       # client-reachable MQTT endpoint (NOT the gRPC NODE_ADVERTISE_ADDR)
+    soft_limit: 0.8               # redirect when local utilisation exceeds this
+    lb_strategy: round_robin      # round_robin | least_connections | consistent_hash
+    shared_route_policy: fanout   # fanout (baseline) | single (cross-node $share semantics)

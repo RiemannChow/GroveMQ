@@ -162,6 +162,18 @@ func main() {
 	// --- Start Local Broker ---
 	b = broker.New(nodeID, clusterMgr)
 
+	// Load-balancing configuration (docs/design/LOAD_BALANCING.md). Both
+	// values can be overridden for container deploys; defaults
+	// ("fanout" / "round_robin") keep rolling upgrades safe (design G5).
+	balance := cfg.Broker.Balance
+	if v := os.Getenv("GROVEMQ_SHARED_ROUTE_POLICY"); v != "" {
+		balance.SharedRoutePolicy = v
+	}
+	if v := os.Getenv("GROVEMQ_LB_STRATEGY"); v != "" {
+		balance.LBStrategy = v
+	}
+	b.SetBalanceConfig(balance.SharedRoutePolicy, balance.LBStrategy)
+
 	// Apply operational knobs from config (New() already set safe defaults;
 	// only override when the config value is explicitly set).
 	if cfg.Broker.MailboxSize > 0 {

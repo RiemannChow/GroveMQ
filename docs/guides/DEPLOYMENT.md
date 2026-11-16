@@ -306,20 +306,10 @@ spec:
     - name: metrics
       port: 8082
       targetPort: 8082
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: grovemq-lb
-  namespace: grovemq
-spec:
-  type: LoadBalancer
-  selector:
-    app: grovemq
-  ports:
-    - name: mqtt
-      port: 1883
-      targetPort: 1883
+# The client-facing L4 MQTT load balancer is delivered as k8s/service.yaml.
+# Apply it with: kubectl apply -f k8s/service.yaml
+# (type: LoadBalancer, sessionAffinity: ClientIP, externalTrafficPolicy: Local;
+#  see docs/design/LOAD_BALANCING.md §6.1). Single source of truth, no drift.
 ---
 apiVersion: apps/v1
 kind: StatefulSet

@@ -1,0 +1,41 @@
+# L4 load balancer for MQTT clients (design docs/design/LOAD_BALANCING.md §6.1).
+#
+# MQTT is a long-lived binary protocol: use an L4 balancer only. An HTTP/Ingress
+# (L7) proxy would break MQTT framing and connection state. Balancing happens
+# exactly once, at CONNECT time; ClientIP affinity makes reconnects land back on
+# the same node and reduces session / retained / will state drift.
+#
+# Pair this with k8s/statefulset.yaml (each pod must have a local endpoint for
+# externalTrafficPolicy: Local) and set MQTT_ADVERTISE_ADDR to the client
+# reachable MQTT endpoint when GROVEMQ_ACCESS_LB=redirect is enabled.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grovemq-mqtt
+  namespace: grovemq
+  labels:
+    app: grovemq
+spec:
+  type: LoadBalancer
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  # Preserve the client source IP so ClientIP affinity works. Nodes with no
+  # local endpoint drop traffic; with a StatefulSet every pod is an endpoint.
+  externalTrafficPolicy: Local
+  selector:
+    app: grovemq
+  ports:
+    - name: mqtt
+      port: 1883
+      targetPort: 1883
+      protocol: TCP
+    - name: websocket
+      port: 8083
+      targetPort: 8083
+      protocol: TCP
+    - name: tls-mqtt
+      port: 8883
+      targetPort: 8883
+      protocol: TCP

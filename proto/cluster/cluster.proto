@@ -1,3 +1,7 @@
+// DEPRECATED: this is a stale copy whose schema does NOT match the generated
+// code. The single source of truth is pkg/proto/cluster/cluster.proto
+// (see the "source:" header in pkg/proto/cluster/cluster.pb.go). Do not edit
+// this file; it is kept only for historical reference.
 syntax = "proto3";
 
 package proto;

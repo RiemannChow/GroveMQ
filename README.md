@@ -37,7 +37,7 @@ GroveMQ is an MQTT broker built for unmatched scalability and reliability across
 
 *   **Core MQTT v3.1.1 / v5.0 Broker**: Supports essential MQTT functionalities, including client connections (`CONNECT`), topic subscriptions (`SUBSCRIBE`), and message publishing (`PUBLISH`), with MQTT 5.0 properties and reason codes.
 *   **Actor-Based Concurrency**: Leverages a lightweight, OTP-inspired actor model for robust and concurrent management of client sessions. Includes supervisors that follow the "let it crash" philosophy for fault tolerance.
-*   **Dynamic Clustering**: Nodes can form a distributed cluster for high availability and load distribution. Message routing between nodes is handled automatically.
+*   **Dynamic Clustering**: Nodes can form a distributed cluster for high availability and cross-node message routing. Message routing between nodes is handled automatically; shared-subscription load balancing across nodes is opt-in (see `docs/design/LOAD_BALANCING.md`).
 *   **Kubernetes-Native Discovery**: Automatically discovers peer nodes within a Kubernetes environment using a headless service, enabling seamless cluster formation.
 *   **High-Performance Communication**: Utilizes gRPC for efficient and strongly-typed inter-node communication for routing, state synchronization, and cluster management.
 *   **Prometheus Metrics**: Exposes key operational metrics (e.g., connection counts, actor restarts) in a Prometheus-compatible format for easy monitoring.
@@ -88,7 +88,7 @@ Once connected, you can subscribe to topics and publish messages to test the bro
 
 ### Testing Cluster Functionality
 
-GroveMQ supports distributed clustering for high availability and load distribution. You can test the cluster functionality locally:
+GroveMQ supports distributed clustering for high availability and cross-node message routing. Access-layer (L4 / MQTT 5 redirect) and forwarding-layer (shared-subscription single-target) load balancing are configurable; see `docs/design/LOAD_BALANCING.md`. You can test the cluster functionality locally:
 
 **Quick Start - 3-Node Cluster**:
 

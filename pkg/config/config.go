@@ -88,17 +88,30 @@ type HookConfig struct {
 	Audit     AuditHookConfig     `yaml:"audit" json:"audit"`
 }
 
+// BalanceConfig groups the access-layer (and forwarding-layer) load-balancing
+// settings introduced by the Mode B design (docs/design/LOAD_BALANCING.md §6.2).
+// All fields are optional: an empty value means "use the built-in default", so
+// older configuration files that lack the balance section keep working.
+type BalanceConfig struct {
+	AccessLB          string  `yaml:"access_lb" json:"access_lb"`
+	MQTTAdvertiseAddr string  `yaml:"mqtt_advertise_addr" json:"mqtt_advertise_addr"`
+	SoftLimit         float64 `yaml:"soft_limit" json:"soft_limit"`
+	LBStrategy        string  `yaml:"lb_strategy" json:"lb_strategy"`
+	SharedRoutePolicy string  `yaml:"shared_route_policy" json:"shared_route_policy"`
+}
+
 // BrokerConfig represents the overall broker configuration
 type BrokerConfig struct {
-	NodeID        string     `yaml:"node_id" json:"node_id"`
-	MQTTPort      string     `yaml:"mqtt_port" json:"mqtt_port"`
-	WebSocketPort string     `yaml:"websocket_port" json:"websocket_port"` // empty = WebSocket gateway disabled
-	GRPCPort      string     `yaml:"grpc_port" json:"grpc_port"`
-	MetricsPort   string     `yaml:"metrics_port" json:"metrics_port"`
-	DashboardPort string     `yaml:"dashboard_port" json:"dashboard_port"`
-	Auth          AuthConfig `yaml:"auth" json:"auth"`
-	ACL           ACLConfig  `yaml:"acl" json:"acl"`
-	Hooks         HookConfig `yaml:"hooks" json:"hooks"`
+	NodeID        string        `yaml:"node_id" json:"node_id"`
+	MQTTPort      string        `yaml:"mqtt_port" json:"mqtt_port"`
+	WebSocketPort string        `yaml:"websocket_port" json:"websocket_port"` // empty = WebSocket gateway disabled
+	GRPCPort      string        `yaml:"grpc_port" json:"grpc_port"`
+	MetricsPort   string        `yaml:"metrics_port" json:"metrics_port"`
+	DashboardPort string        `yaml:"dashboard_port" json:"dashboard_port"`
+	Auth          AuthConfig    `yaml:"auth" json:"auth"`
+	ACL           ACLConfig     `yaml:"acl" json:"acl"`
+	Hooks         HookConfig    `yaml:"hooks" json:"hooks"`
+	Balance       BalanceConfig `yaml:"balance" json:"balance"`
 
 	// MailboxSize is the capacity of each subscriber's delivery mailbox. A
 	// slow or stalled subscriber fills its mailbox; once full, best-effort
@@ -163,6 +176,15 @@ func DefaultConfig() *Config {
 			Hooks: HookConfig{
 				RateLimit: RateLimitHookConfig{Enabled: false, PublishRate: 0, PublishBurst: 0},
 				Audit:     AuditHookConfig{Enabled: false},
+			},
+			// Load balancing defaults are the safe baseline: no new behaviour
+			// during rolling upgrades (design §3 G5).
+			Balance: BalanceConfig{
+				AccessLB:          "off",
+				MQTTAdvertiseAddr: "",
+				SoftLimit:         0.8,
+				LBStrategy:        "round_robin",
+				SharedRoutePolicy: "fanout",
 			},
 		},
 	}
@@ -301,6 +323,28 @@ func validateConfig(config *Config) error {
 	// max_connections: 0 means unlimited; a negative value is invalid.
 	if config.Broker.MaxConnections < 0 {
 		return fmt.Errorf("broker.max_connections must be >= 0, got %v", config.Broker.MaxConnections)
+	}
+
+	// Load balancing (docs/design/LOAD_BALANCING.md §6.2). Empty strings and a
+	// zero soft_limit mean "unset", so older config files keep working.
+	b := config.Broker.Balance
+	switch b.AccessLB {
+	case "", "off", "l4", "redirect", "both":
+	default:
+		return fmt.Errorf("broker.balance.access_lb must be one of off|l4|redirect|both, got %q", b.AccessLB)
+	}
+	if b.SoftLimit < 0 || b.SoftLimit > 1 {
+		return fmt.Errorf("broker.balance.soft_limit must be in (0,1], got %v", b.SoftLimit)
+	}
+	switch b.LBStrategy {
+	case "", "round_robin", "least_connections", "consistent_hash":
+	default:
+		return fmt.Errorf("broker.balance.lb_strategy must be one of round_robin|least_connections|consistent_hash, got %q", b.LBStrategy)
+	}
+	switch b.SharedRoutePolicy {
+	case "", "fanout", "single":
+	default:
+		return fmt.Errorf("broker.balance.shared_route_policy must be fanout or single, got %q", b.SharedRoutePolicy)
 	}
 
 	return nil

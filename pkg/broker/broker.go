@@ -126,6 +126,13 @@ type Broker struct {
 	WriteTimeout   time.Duration // outbound write deadline (0 => disabled)
 	MaxConnections int           // hard connection cap (0 => unlimited)
 
+	// AdmissionFunc is the access-layer redirect hook (design §6.2). A non-zero
+	// reason code makes the broker send CONNACK with that code plus Server
+	// Reference, then close the connection WITHOUT creating a session. Nil
+	// disables Mode B entirely. Keeping it a plain func avoids importing
+	// pkg/balancer here.
+	AdmissionFunc func(clientID string, protoVer byte) (reasonCode byte, serverRef string)
+
 	// activeConns is the current number of live connections, used to enforce
 	// MaxConnections. Accessed atomically.
 	activeConns int64
@@ -337,6 +344,8 @@ func New(nodeID string, clusterMgr *cluster.Manager) *Broker {
 		// Set the callback for the cluster manager to publish locally,
 		// preserving the originating publish's QoS.
 		clusterMgr.LocalPublishFunc = b.RouteToLocalSubscribersWithQoS
+		clusterMgr.LocalSharedPublishFunc = b.RouteToLocalSharedSubscribers
+		clusterMgr.LocalLoadFunc = b.localLoad
 	}
 	return b
 }
@@ -792,6 +801,17 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 				}
 			}
 
+			// Access-layer admission (design §6.2): evaluated AFTER
+			// authentication, BEFORE session creation. MQTT 5.0 only.
+			var serverRef string
+			if b.AdmissionFunc != nil && connackCode == packets.CodeSuccess.Code {
+				if code, ref := b.AdmissionFunc(clientID, pk.ProtocolVersion); code != 0 {
+					connackCode = code
+					serverRef = ref
+					log.Printf("[INFO] Redirecting TLS client %s to %s (0x%02x)", clientID, ref, code)
+				}
+			}
+
 			// Send CONNACK response
 			resp := packets.Packet{
 				FixedHeader: packets.FixedHeader{Type: packets.Connack},
@@ -802,6 +822,11 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 			// encoded in the correct wire format for both success and failure
 			// (see plain handler for rationale).
 			resp.ProtocolVersion = pk.ProtocolVersion
+
+			if serverRef != "" {
+				// mochi-mqtt encodes PropServerReference (28) for us.
+				resp.Properties.ServerReference = serverRef
+			}
 
 			// Set MQTT 5.0 properties in CONNACK only on successful auth.
 			if connackCode == packets.CodeSuccess.Code {
@@ -1215,12 +1240,24 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 				}
 			}
 
+			// Access-layer admission (design §6.2): AFTER authentication,
+			// BEFORE session creation. A redirect must not consume a
+			// MaxConnections slot, so it is decided before the cap check.
+			var serverRef string
+			if b.AdmissionFunc != nil && connackCode == packets.CodeSuccess.Code {
+				if code, ref := b.AdmissionFunc(connectClientID, pk.ProtocolVersion); code != 0 {
+					connackCode = code
+					serverRef = ref
+					log.Printf("[INFO] Redirecting client %s to %s (0x%02x)", connectClientID, ref, code)
+				}
+			}
+
 			// Enforce the maximum connection limit before committing to this
 			// connection. A slot is reserved atomically; if the limit is reached
 			// we reject (MQTT 5.0: 0x97 Quota Exceeded; MQTT 3.1/3.1.1 has no
 			// such code, so we simply close the socket). The slot is released in
 			// removeConnection on disconnect.
-			if b.MaxConnections > 0 {
+			if serverRef == "" && b.MaxConnections > 0 {
 				if !b.reserveConnectionSlot() {
 					log.Printf("[WARN] Connection rejected for %s: max_connections (%d) reached", connectClientID, b.MaxConnections)
 					if pk.ProtocolVersion == 5 {
@@ -1245,6 +1282,11 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 			// (e.g. reason code 0x84), otherwise v5 clients misparse the
 			// rejection and believe the connection succeeded.
 			resp.ProtocolVersion = pk.ProtocolVersion
+
+			if serverRef != "" {
+				// mochi-mqtt encodes PropServerReference (28) for us.
+				resp.Properties.ServerReference = serverRef
+			}
 
 			// Set MQTT 5.0 properties in CONNACK only on successful auth.
 			if connackCode == packets.CodeSuccess.Code {
@@ -1429,6 +1471,17 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 					continue
 				}
 
+				// Shared-subscription filters must be structurally valid:
+				// $share/<group>/<topic> with a plain group name. A malformed
+				// filter would register a route key no published topic can
+				// ever match (design §5.2.1).
+				sharedGroup, _, parseErr := topic.ParseSharedFilter(sub.Filter)
+				if parseErr != nil {
+					log.Printf("[ERROR] Client %s sent invalid shared filter '%s': %v", clientID, sub.Filter, parseErr)
+					reasonCodes = append(reasonCodes, subackReturnCode(pk.ProtocolVersion, 0x9F)) // Topic filter invalid
+					continue
+				}
+
 				// SECURITY FIX: Validate QoS level (MQTT spec allows 0, 1, 2 only)
 				if sub.Qos > 2 {
 					log.Printf("[ERROR] Client %s requested invalid QoS %d for topic %s. Protocol violation.", clientID, sub.Qos, sub.Filter)
@@ -1521,8 +1574,9 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 
 				// Create route for cluster
 				newRoute := &clusterpb.Route{
-					Topic:   sub.Filter,
-					NodeIds: []string{b.nodeID},
+					Topic:       sub.Filter,
+					NodeIds:     []string{b.nodeID},
+					SharedGroup: sharedGroup,
 				}
 				newRoutes = append(newRoutes, newRoute)
 				log.Printf("[DEBUG] Added route for cluster: Topic=%s, NodeID=%s", sub.Filter, b.nodeID)
@@ -2694,6 +2748,62 @@ func (b *Broker) RouteToLocalSubscribersWithQoS(topicName string, payload []byte
 // - payload: The message content.
 func (b *Broker) RouteToLocalSubscribers(topicName string, payload []byte) {
 	b.RouteToLocalSubscribersWithQoS(topicName, payload, 0)
+}
+
+// RouteToLocalSharedSubscribers is the group-scoped counterpart of
+// RouteToLocalSubscribersWithQoS. It is wired as cluster.Manager's
+// LocalSharedPublishFunc: when the publishing node selected this node for a
+// set of shared groups, only those groups (plus ordinary subscribers) may be
+// delivered here. Other local groups were assigned to other target nodes.
+func (b *Broker) RouteToLocalSharedSubscribers(topicName string, payload []byte, publishQoS byte, groups map[string]bool) {
+	b.processMessageThroughRuleEngine(topicName, payload, publishQoS, "", nil)
+
+	subscribers := b.topics.GetSubscribersForGroups(topicName, groups)
+	if len(subscribers) == 0 {
+		b.hooks.MessageDropped(context.Background(), &hooks.MessageDroppedCtx{
+			Topic: topicName, QoS: int(publishQoS), Reason: "no subscribers",
+		})
+	} else {
+		b.hooks.MessageDelivered(context.Background(), &hooks.MessageCtx{
+			Topic: topicName, QoS: int(publishQoS), Payload: payload, Size: len(payload),
+		})
+		for _, sub := range subscribers {
+			effectiveQoS := publishQoS
+			if sub.QoS < publishQoS {
+				effectiveQoS = sub.QoS
+			}
+			msg := session.Publish{
+				Topic:   topicName,
+				Payload: payload,
+				QoS:     effectiveQoS,
+			}
+			b.deliverToSubscriber(sub, msg)
+		}
+	}
+}
+
+// localLoad reports this node's live connection counts for the load table.
+// It is called on the control plane (SyncNodeStatus probe), never per PUBLISH.
+func (b *Broker) localLoad() cluster.NodeLoad {
+	b.connMu.RLock()
+	conns := int64(len(b.connections))
+	b.connMu.RUnlock()
+	return cluster.NodeLoad{
+		NodeId:         b.nodeID,
+		Connections:    conns,
+		MaxConnections: int64(b.MaxConnections),
+		UnixNano:       time.Now().UnixNano(),
+	}
+}
+
+// SetBalanceConfig wires the forwarding-plane policy and selector strategy
+// into the cluster manager. It is safe to call with a nil cluster manager
+// (standalone broker / unit tests).
+func (b *Broker) SetBalanceConfig(policy, strategy string) {
+	if b.cluster == nil {
+		return
+	}
+	b.cluster.SetBalanceConfig(policy, strategy)
 }
 
 // readPacket reads a full MQTT packet from a connection.

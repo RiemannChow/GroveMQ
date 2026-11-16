@@ -100,14 +100,36 @@ func (s *Server) BatchUpdateRoutes(ctx context.Context, req *clusterpb.BatchUpda
 //
 // Returns an acknowledgment of receipt.
 func (s *Server) ForwardPublish(ctx context.Context, req *clusterpb.PublishForward) (*clusterpb.ForwardAck, error) {
-	log.Printf("Received ForwardPublish request for topic '%s' from node %s (to=%s, qos=%d)", req.Topic, req.FromNode, req.ToNode, req.Qos)
-	if s.manager.LocalPublishFunc != nil {
+	log.Printf("Received ForwardPublish request for topic '%s' from node %s (to=%s, qos=%d, groups=%v)", req.Topic, req.FromNode, req.ToNode, req.Qos, req.SharedGroups)
+	isRelay := req.ToNode != "" && req.ToNode != s.NodeID
+
+	if !isRelay {
+		if len(req.SharedGroups) > 0 {
+			// Group-scoped delivery: only the groups the publishing node
+			// selected for us, plus ordinary subscribers. Other local groups
+			// belong to other target nodes and must not be delivered here.
+			set := make(map[string]bool, len(req.SharedGroups))
+			for _, g := range req.SharedGroups {
+				set[g] = true
+			}
+			if s.manager.LocalSharedPublishFunc != nil {
+				s.manager.LocalSharedPublishFunc(req.Topic, req.Payload, byte(req.Qos), set)
+			} else if s.manager.LocalPublishFunc != nil {
+				s.manager.LocalPublishFunc(req.Topic, req.Payload, byte(req.Qos))
+			}
+		} else if s.manager.LocalPublishFunc != nil {
+			s.manager.LocalPublishFunc(req.Topic, req.Payload, byte(req.Qos))
+		}
+	} else if len(req.SharedGroups) == 0 && s.manager.LocalPublishFunc != nil {
+		// Retain the historical relay behaviour for ordinary fan-out forwards.
+		// A group-scoped relay must NOT be delivered on the intermediate node.
 		s.manager.LocalPublishFunc(req.Topic, req.Payload, byte(req.Qos))
 	}
-	if req.ToNode != "" && req.ToNode != s.NodeID {
+
+	if isRelay {
 		// Relay toward the final destination, never sending back to the node we
-		// received it from (prevents loops).
-		s.manager.forwardToNodeFrom(req.Topic, req.Payload, req.ToNode, req.FromNode, byte(req.Qos))
+		// received it from (prevents loops). Group metadata survives the hop.
+		s.manager.forwardToNodeFromEx(req.Topic, req.Payload, req.ToNode, req.FromNode, byte(req.Qos), req.SharedGroups, req.SelectorEpoch)
 	}
 	return &clusterpb.ForwardAck{Success: true}, nil
 }
@@ -137,8 +159,10 @@ func (s *Server) SyncState(ctx context.Context, req *clusterpb.SyncStateRequest)
 // leader election. It simply acknowledges, letting a probing Core confirm the
 // peer's gRPC endpoint is reachable.
 func (s *Server) SyncNodeStatus(ctx context.Context, req *clusterpb.SyncNodeStatusRequest) (*clusterpb.SyncNodeStatusResponse, error) {
+	load := s.manager.LocalLoad()
 	return &clusterpb.SyncNodeStatusResponse{
 		Success:  true,
 		AllNodes: []*clusterpb.NodeInfo{{NodeId: s.NodeID, Address: s.manager.NodeAddress}},
+		Load:     toNodeLoadProto(load),
 	}, nil
 }

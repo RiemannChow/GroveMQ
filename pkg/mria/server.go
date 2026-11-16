@@ -220,6 +220,11 @@ func (s *MriaClusterServer) SyncNodeStatus(ctx context.Context, req *clusterpb.S
 		allNodes = append(allNodes, node)
 	}
 
+	// Deliberately no Load here: this stub does not carry broker connection
+	// counters, and an empty/absent load makes the forwarding plane treat the
+	// node as stale and fall back to fan-out (design §5.5) instead of picking a
+	// node that never delivers. The full load-aware implementation is
+	// pkg/cluster.Server.SyncNodeStatus.
 	return &clusterpb.SyncNodeStatusResponse{
 		Success:  true,
 		Message:  "Status synchronized",
@@ -261,7 +266,13 @@ func (s *MriaClusterServer) ForwardPublish(ctx context.Context, req *clusterpb.P
 		return s.handleMriaMessage(ctx, req)
 	}
 
-	// Handle regular message forwarding
+	// Regular message forwarding. Group-scoped delivery (SharedGroups), relay
+	// metadata and LocalSharedPublishFunc live in pkg/cluster.Server. When this
+	// server wraps a base server, delegate so those semantics are not silently
+	// dropped; standalone Mria deployments keep the historical ACK stub.
+	if s.baseServer != nil {
+		return s.baseServer.ForwardPublish(ctx, req)
+	}
 	// This would typically involve publishing to local subscribers
 	success := true
 	message := "Message forwarded successfully"

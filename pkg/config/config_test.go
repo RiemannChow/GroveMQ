@@ -411,3 +411,45 @@ func findUser(users []UserConfig, username string) *UserConfig {
 	}
 	return nil
 }
+
+func TestDefaultConfigBalance(t *testing.T) {
+	cfg := DefaultConfig()
+	assert.Equal(t, "off", cfg.Broker.Balance.AccessLB)
+	assert.Equal(t, 0.8, cfg.Broker.Balance.SoftLimit)
+	assert.Equal(t, "round_robin", cfg.Broker.Balance.LBStrategy)
+	assert.Equal(t, "fanout", cfg.Broker.Balance.SharedRoutePolicy)
+	assert.Empty(t, cfg.Broker.Balance.MQTTAdvertiseAddr)
+}
+
+func TestBalanceConfigMatchesShippedYAML(t *testing.T) {
+	// The two configuration sources must not drift (design §11 / test-baseline
+	// constraint in TestDefaultConfig).
+	loaded, err := LoadConfig("../../config.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, DefaultConfig().Broker.Balance, loaded.Broker.Balance)
+}
+
+func TestValidateBalanceConfig(t *testing.T) {
+	require.NoError(t, validateConfig(DefaultConfig()))
+	cases := []struct {
+		name   string
+		mutate func(*BalanceConfig)
+	}{
+		{"access_lb", func(b *BalanceConfig) { b.AccessLB = "bogus" }},
+		{"soft_limit_above_one", func(b *BalanceConfig) { b.SoftLimit = 1.5 }},
+		{"soft_limit_negative", func(b *BalanceConfig) { b.SoftLimit = -0.1 }},
+		{"lb_strategy", func(b *BalanceConfig) { b.LBStrategy = "random" }},
+		{"shared_route_policy", func(b *BalanceConfig) { b.SharedRoutePolicy = "maybe" }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			c.mutate(&cfg.Broker.Balance)
+			require.Error(t, validateConfig(cfg))
+		})
+	}
+	// Unset values are legal for older configuration files.
+	cfg := DefaultConfig()
+	cfg.Broker.Balance = BalanceConfig{}
+	require.NoError(t, validateConfig(cfg))
+}

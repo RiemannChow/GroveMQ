@@ -28,6 +28,18 @@ message NodeInfo {
   int64 last_seen = 6;
 }
 
+// NodeLoad is a lightweight, point-in-time load snapshot of one node. It is
+// transported on the SyncNodeStatus liveness probe (control plane, ~5s) and
+// consumed from a local in-memory copy on the PUBLISH hot path.
+message NodeLoad {
+  string node_id = 1;
+  int64 connections = 2;
+  int64 sessions = 3;
+  int64 subscriptions = 4;
+  int64 max_connections = 5;
+  int64 unix_nano = 6;
+}
+
 // JoinRequest is sent by a node wishing to become a member of the cluster.
 message JoinRequest {
   // node contains the information about the joining node.
@@ -90,6 +102,9 @@ message SyncNodeStatusResponse {
   // all_nodes contains the responding node's complete view of the cluster,
   // allowing the requester to update its own list.
   repeated NodeInfo all_nodes = 3;
+  // load is the responding node's lightweight load snapshot, piggybacked on
+  // the liveness probe so no extra RPC is needed for load reporting.
+  NodeLoad load = 4;
 }
 
 // Subscription represents a single client's subscription to a topic, which
@@ -165,6 +180,15 @@ message PublishForward {
   // re-broadcasting it to every matching subscriber), which lets a Replicant
   // that has no direct link to the subscriber deliver through a Core.
   string to_node = 11;
+  // shared_groups holds the shared-subscription groups for which the target
+  // node was selected. Empty means an ordinary fan-out forward. The receiving
+  // node delivers to exactly these groups (plus any ordinary subscribers) and
+  // must not re-broadcast to other nodes. A list, rather than a single group,
+  // is used so a node chosen by several groups is forwarded to only once.
+  repeated string shared_groups = 12;
+  // selector_epoch is the routing-table version observed by the publishing
+  // node. Diagnostic only; it never participates in the delivery decision.
+  uint64 selector_epoch = 13;
 }
 
 // ForwardAck is the acknowledgment sent in response to a PublishForward message.
@@ -190,6 +214,9 @@ message Route {
   repeated string node_ids = 2;
   // update_time is the Unix timestamp of the last modification to this route.
   int64 update_time = 3;
+  // shared_group is empty for ordinary subscriptions and holds the group name
+  // for routes registered from a $share/<group>/<topic> filter.
+  string shared_group = 4;
 }
 
 // BatchUpdateRoutesRequest is used to send multiple routing updates in a single

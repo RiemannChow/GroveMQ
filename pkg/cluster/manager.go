@@ -24,6 +24,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	clusterpb "github.com/turtacn/grovemq/pkg/proto/cluster"
@@ -79,6 +80,15 @@ type Manager struct {
 	mu               sync.RWMutex
 	LocalPublishFunc func(topic string, payload []byte, qos byte)
 
+	// Load-balancing state (docs/design/LOAD_BALANCING.md). Wired at start-up;
+	// only selectorEpoch is mutated on the PUBLISH hot path.
+	LocalSharedPublishFunc func(topic string, payload []byte, qos byte, groups map[string]bool)
+	LocalLoadFunc          func() NodeLoad
+	loadTable              *NodeLoadTable
+	selector               NodeSelector
+	sharedRoutePolicy      string
+	selectorEpoch          atomic.Uint64
+
 	// StateStore and RetainedStore are optional durable stores. When set, the
 	// cluster applies replicated state (sessions, retained messages) received
 	// from peers into them, providing high availability of durable broker state.
@@ -121,13 +131,16 @@ func (m *Manager) SetStateStores(state storage.Store, retained messages.StorageB
 // - localPublishFunc: A callback function to publish messages to local subscribers.
 func NewManager(nodeID, nodeAddress string, localPublishFunc func(topic string, payload []byte, qos byte)) *Manager {
 	return &Manager{
-		NodeID:           nodeID,
-		NodeAddress:      nodeAddress,
-		peers:            make(map[string]*Client),
-		remoteRoutes:     make(map[string]map[string]struct{}),
-		LocalPublishFunc: localPublishFunc,
-		role:             CoreNode,
-		coreAddrs:        make(map[string]string),
+		NodeID:            nodeID,
+		NodeAddress:       nodeAddress,
+		peers:             make(map[string]*Client),
+		remoteRoutes:      make(map[string]map[string]struct{}),
+		LocalPublishFunc:  localPublishFunc,
+		loadTable:         NewNodeLoadTable(),
+		selector:          NewNodeSelector("round_robin"),
+		sharedRoutePolicy: "fanout",
+		role:              CoreNode,
+		coreAddrs:         make(map[string]string),
 	}
 }
 
@@ -337,6 +350,16 @@ func (m *Manager) CoreNodeIDs() []string {
 // Replicant publishing to another Replicant that only connects to Cores), the
 // message is relayed through a Core.
 func (m *Manager) RouteRemote(topic string, payload []byte, publishQoS byte) {
+	m.mu.RLock()
+	policy := m.sharedRoutePolicy
+	m.mu.RUnlock()
+
+	if policy == "single" {
+		m.routeRemoteSingle(topic, payload, publishQoS)
+		return
+	}
+	// Default "fanout" preserves the baseline behaviour byte-for-byte during
+	// rolling upgrades (design §3 G5).
 	for _, nodeID := range m.MatchRemoteSubscribers(topic) {
 		m.forwardToNode(topic, payload, nodeID, publishQoS)
 	}
@@ -562,12 +585,21 @@ func (m *Manager) replicateRoutes() {
 // empty the message is a direct delivery to that peer; when set, it is a relay
 // destined for toNode and the receiving node forwards it onward.
 func (m *Manager) sendForward(peer *Client, topic string, payload []byte, toNode string, qos byte) {
+	m.sendForwardEx(peer, topic, payload, toNode, qos, nil, 0)
+}
+
+// sendForwardEx is sendForward with group-scoped forwarding metadata. It is
+// used by the single-target shared-subscription path and must survive relay
+// hops (ToNode set) unchanged.
+func (m *Manager) sendForwardEx(peer *Client, topic string, payload []byte, toNode string, qos byte, sharedGroups []string, epoch uint64) {
 	req := &clusterpb.PublishForward{
-		Topic:    topic,
-		Payload:  payload,
-		FromNode: m.NodeID,
-		ToNode:   toNode,
-		Qos:      int32(qos),
+		Topic:         topic,
+		Payload:       payload,
+		FromNode:      m.NodeID,
+		ToNode:        toNode,
+		Qos:           int32(qos),
+		SharedGroups:  sharedGroups,
+		SelectorEpoch: epoch,
 	}
 	go func(c *Client) {
 		if _, err := c.ForwardPublish(context.Background(), req); err != nil {
@@ -599,42 +631,7 @@ func (m *Manager) forwardToNode(topic string, payload []byte, nodeID string, qos
 }
 
 func (m *Manager) forwardToNodeFrom(topic string, payload []byte, nodeID, exclude string, qos byte) {
-	if nodeID == m.NodeID {
-		return
-	}
-
-	m.mu.RLock()
-	peer, ok := m.peers[nodeID]
-	var relay *Client
-	if !ok {
-		for id, c := range m.peers {
-			if id == exclude {
-				continue
-			}
-			if m.isCorePeer(id) {
-				relay = c
-				break
-			}
-		}
-		if relay == nil {
-			for id, c := range m.peers {
-				if id == exclude {
-					continue
-				}
-				relay = c
-				break
-			}
-		}
-	}
-	m.mu.RUnlock()
-
-	if ok {
-		m.sendForward(peer, topic, payload, "", qos)
-	} else if relay != nil {
-		m.sendForward(relay, topic, payload, nodeID, qos)
-	} else {
-		log.Printf("Cannot forward publish for %s: no route to node %s", topic, nodeID)
-	}
+	m.forwardToNodeFromEx(topic, payload, nodeID, exclude, qos, nil, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -873,12 +870,20 @@ func (m *Manager) leaderElectionLoop(ctx context.Context) {
 	m.runElection()
 	ticker := time.NewTicker(electionInterval)
 	defer ticker.Stop()
+	round := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			m.runElection()
+			round++
+			// Piggyback load probing on the existing 1s loop: every 5s,
+			// refresh every peer's NodeLoad snapshot over the existing
+			// SyncNodeStatus RPC (no new RPC, design §5.3).
+			if round%5 == 0 {
+				go m.probeLoads(ctx)
+			}
 		}
 	}
 }
@@ -1014,10 +1019,52 @@ func (m *Manager) ping(addr string) bool {
 		return false
 	}
 	defer c.Close()
-	_, err := c.SyncNodeStatus(ctx, &clusterpb.SyncNodeStatusRequest{
+	resp, err := c.SyncNodeStatus(ctx, &clusterpb.SyncNodeStatusRequest{
 		Node: &clusterpb.NodeInfo{NodeId: m.NodeID, Address: m.NodeAddress},
 	})
+	if err == nil && resp.GetLoad() != nil {
+		m.recordRemoteLoad(nodeLoadFromProto(resp.GetLoad()))
+	}
 	return err == nil
+}
+
+// probeLoads refreshes the local NodeLoadTable with a snapshot from every
+// connected peer plus this node's own counters. It reuses SyncNodeStatus so no
+// new RPC is added; failures are ignored (a stale entry simply disables
+// single-target selection for that node, falling back to fan-out).
+func (m *Manager) probeLoads(ctx context.Context) {
+	m.mu.RLock()
+	peers := make(map[string]*Client, len(m.peers))
+	for id, c := range m.peers {
+		peers[id] = c
+	}
+	m.mu.RUnlock()
+
+	for id, c := range peers {
+		cctx, cancel := context.WithTimeout(ctx, pingTimeout)
+		resp, err := c.SyncNodeStatus(cctx, &clusterpb.SyncNodeStatusRequest{
+			Node: &clusterpb.NodeInfo{NodeId: m.NodeID, Address: m.NodeAddress},
+		})
+		cancel()
+		if err == nil && resp.GetLoad() != nil {
+			l := nodeLoadFromProto(resp.GetLoad())
+			if l.NodeId == "" {
+				l.NodeId = id
+			}
+			m.recordRemoteLoad(l)
+		}
+	}
+	m.recordRemoteLoad(m.LocalLoad())
+}
+
+// recordRemoteLoad stores a load snapshot if a load table is wired.
+func (m *Manager) recordRemoteLoad(l NodeLoad) {
+	m.mu.RLock()
+	table := m.loadTable
+	m.mu.RUnlock()
+	if table != nil {
+		table.Update(l)
+	}
 }
 
 // BroadcastRouteUpdate is deprecated. New code should call RegisterRoute, which
