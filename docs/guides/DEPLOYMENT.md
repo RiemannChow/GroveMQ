@@ -786,6 +786,30 @@ systemctl start grovemq@node3
 | METRICS_PORT | ":8082" | 指标监听端口 |
 | DASHBOARD_PORT | ":18083" | Dashboard端口 |
 | PEER_NODES | "" | 集群对等节点 |
+| GROVEMQ_ACCESS_LB | `off` | 接入层模式：`off` / `l4` / `redirect` / `both` |
+| MQTT_ADVERTISE_ADDR | 空 | 客户端可达的 MQTT 端点（**不是** gRPC 的 `NODE_ADVERTISE_ADDR`） |
+| GROVEMQ_LB_SOFT_LIMIT | `0.8` | 本节点连接利用率超过该阈值时触发 `0x9C` 重定向 |
+| GROVEMQ_LB_SECRET | 内置默认值 | 所有节点必须一致；签发单跳重定向 token。生产环境务必显式配置 |
+| GROVEMQ_SHARED_ROUTE_POLICY | `fanout` | `single` 开启跨节点 `$share` 单目标选点 |
+| GROVEMQ_LB_STRATEGY | `round_robin` | `round_robin` / `least_connections` / `consistent_hash` |
+
+### 接入层重定向（Mode B）
+
+将 `GROVEMQ_ACCESS_LB=redirect`（或 `both`）并配置 `MQTT_ADVERTISE_ADDR` 后，
+热点节点会对 **MQTT 5.0** 客户端回复 `CONNACK 0x9C (Use another server)`：
+
+- `Server Reference` 是**纯 host:port 端点**，客户端可直接拿去连接；
+- 一次性凭证通过三个 CONNACK User Property 下发：
+  `grovemq-redirect-token`、`grovemq-redirect-node`、`grovemq-redirect-ts`；
+- 配合的客户端把这三个属性带回下一次 CONNECT，目标节点校验 HMAC 后
+  **强制本地接受**，保证只跳一次；不回传的客户端由每个节点各自记录的
+  30s cooldown 兜底——同一节点不会第二次重定向同一 clientID，因此重定向
+  链的长度受集群节点数限制，遍历后必然收敛，不会形成无限环路；
+- MQTT 3.1.1 没有 `0x9C`，一律本地接受；负载数据缺失或过期时同样不重定向。
+
+`GROVEMQ_LB_SECRET` 未设置时所有节点回退到同一个内置默认密钥（可跨节点校验，
+但可被伪造），**生产环境必须通过 Secret 显式注入且各节点一致**。参见
+`docs/design/LOAD_BALANCING.md` §6.2 与 `k8s/statefulset.yaml`。
 
 ---
 

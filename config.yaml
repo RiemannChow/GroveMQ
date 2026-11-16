@@ -110,7 +110,12 @@ broker:
   # --- Load balancing (docs/design/LOAD_BALANCING.md) ---
   # All fields are optional; omitted values fall back to the same built-in
   # defaults in DefaultConfig(). The defaults introduce no new behaviour,
-  # which keeps rolling upgrades safe.
+  # which keeps rolling upgrades safe. Every field also has an env override
+  # (used by k8s/statefulset.yaml):
+  #   GROVEMQ_ACCESS_LB, MQTT_ADVERTISE_ADDR, GROVEMQ_LB_SOFT_LIMIT,
+  #   GROVEMQ_LB_SECRET, GROVEMQ_SHARED_ROUTE_POLICY, GROVEMQ_LB_STRATEGY
+  # GROVEMQ_LB_SECRET must be identical on every node: it signs the one-hop
+  # CONNACK 0x9C redirect token carried in MQTT 5.0 user properties.
   balance:
     access_lb: off                 # off | l4 | redirect | both
     mqtt_advertise_addr: ""       # client-reachable MQTT endpoint (NOT the gRPC NODE_ADVERTISE_ADDR)

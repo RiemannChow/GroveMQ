@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/turtacn/grovemq/pkg/admin"
+	"github.com/turtacn/grovemq/pkg/balancer"
 	"github.com/turtacn/grovemq/pkg/broker"
 	"github.com/turtacn/grovemq/pkg/cluster"
 	"github.com/turtacn/grovemq/pkg/config"
@@ -162,9 +163,9 @@ func main() {
 	// --- Start Local Broker ---
 	b = broker.New(nodeID, clusterMgr)
 
-	// Load-balancing configuration (docs/design/LOAD_BALANCING.md). Both
-	// values can be overridden for container deploys; defaults
-	// ("fanout" / "round_robin") keep rolling upgrades safe (design G5).
+	// Load-balancing configuration (docs/design/LOAD_BALANCING.md). Every value
+	// can be overridden for container deploys; defaults ("off" / "fanout" /
+	// "round_robin") keep rolling upgrades safe (design G5).
 	balance := cfg.Broker.Balance
 	if v := os.Getenv("GROVEMQ_SHARED_ROUTE_POLICY"); v != "" {
 		balance.SharedRoutePolicy = v
@@ -172,7 +173,80 @@ func main() {
 	if v := os.Getenv("GROVEMQ_LB_STRATEGY"); v != "" {
 		balance.LBStrategy = v
 	}
+	if v := os.Getenv("GROVEMQ_ACCESS_LB"); v != "" {
+		balance.AccessLB = v
+	}
+	if v := os.Getenv("MQTT_ADVERTISE_ADDR"); v != "" {
+		balance.MQTTAdvertiseAddr = v
+	}
+	if v := os.Getenv("GROVEMQ_LB_SOFT_LIMIT"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			balance.SoftLimit = f
+		} else {
+			log.Printf("[WARN] ignoring invalid GROVEMQ_LB_SOFT_LIMIT %q: %v", v, err)
+		}
+	}
 	b.SetBalanceConfig(balance.SharedRoutePolicy, balance.LBStrategy)
+
+	// Access layer (design §6.2, Mode B): hand the CONNECT decision to the
+	// admission controller and validate one-hop redirect credentials on the
+	// target node. Both hooks are nil unless redirect mode is enabled, so the
+	// default configuration never changes connection behaviour.
+	if balance.AccessLB == "redirect" || balance.AccessLB == "both" {
+		secret := []byte(os.Getenv("GROVEMQ_LB_SECRET"))
+		if len(secret) == 0 {
+			log.Printf("[WARN] GROVEMQ_LB_SECRET is unset; redirect tokens fall back to the built-in shared secret. Set the same value on every node in production.")
+		}
+		if balance.MQTTAdvertiseAddr == "" {
+			log.Printf("[WARN] GROVEMQ_ACCESS_LB=%s but MQTT_ADVERTISE_ADDR is empty; access-layer redirect disabled", balance.AccessLB)
+		} else {
+			loads := func() balancer.LoadSnapshot {
+				out := make(balancer.LoadSnapshot)
+				for id, l := range clusterMgr.LoadTable().Snapshot() {
+					out[id] = balancer.NodeLoad{
+						NodeID:         id,
+						Connections:    l.Connections,
+						MaxConnections: l.MaxConnections,
+						UnixNano:       l.UnixNano,
+					}
+				}
+				return out
+			}
+			local := func() balancer.NodeLoad {
+				l := clusterMgr.LocalLoad()
+				return balancer.NodeLoad{
+					NodeID:         l.NodeId,
+					Connections:    l.Connections,
+					MaxConnections: l.MaxConnections,
+					UnixNano:       l.UnixNano,
+				}
+			}
+			ctrl := balancer.NewAdmissionController(balancer.Config{
+				Mode:              balance.AccessLB,
+				MQTTAdvertiseAddr: balance.MQTTAdvertiseAddr,
+				SoftLimit:         balance.SoftLimit,
+				Secret:            secret,
+				Loads:             loads,
+			})
+			b.AdmissionFunc = func(clientID string, protoVer byte) (byte, string) {
+				d := ctrl.OnConnect(clientID, protoVer, local())
+				if d.Accept {
+					return 0, ""
+				}
+				return d.ReasonCode, d.ServerRef
+			}
+			b.RedirectTokenFunc = func(clientID string, props map[string]string) bool {
+				ts, err := strconv.ParseInt(props[balancer.RedirectTimeProperty], 10, 64)
+				if err != nil {
+					return false
+				}
+				return balancer.ValidateRedirectToken(secret, clientID,
+					props[balancer.RedirectTokenProperty], ts, props[balancer.RedirectNodeProperty])
+			}
+			log.Printf("[INFO] Access-layer load balancing enabled: mode=%s mqtt_endpoint=%s soft_limit=%.2f",
+				balance.AccessLB, balance.MQTTAdvertiseAddr, balance.SoftLimit)
+		}
+	}
 
 	// Apply operational knobs from config (New() already set safe defaults;
 	// only override when the config value is explicitly set).
