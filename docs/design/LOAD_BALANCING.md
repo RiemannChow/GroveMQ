@@ -2,14 +2,15 @@
 
 | 项 | 值 |
 | --- | --- |
-| 状态 | **Draft — 待评审**，未实现、未提交 |
+| 状态 | **已实现、已提交**（设计稿保留原貌，实现偏差见 §11.1） |
 | 基线 | `52d0abf`（含 6 个 P0 修复） |
+| 实现 | `89458cb`（主体）、`6cb7d2f`（重定向凭证）、`70b8d58`（接入层装配），均为英文 commit log |
 | 范围 | 连接接入层负载均衡、消息转发层负载均衡 |
 | 作者 | GroveMQ Team |
 | 关联 | `docs/phase-3/RISK.md`（topic 分片设想）、`docs/guides/DEPLOYMENT.md`（K8s 示例） |
 
-> 本文只做设计，**不改代码**。评审通过后按第 11 节拆分实现，每个改动一个英文 commit。
-> 文中所有"现状"结论均来自对基线代码的实读，行号以基线为准。
+> 本文正文是**设计基线**：所有"现状"结论与行号均来自对 `52d0abf` 的实读。
+> 实现已按第 11 节落地并合入 `main`；正文保留当时的设计推演，与实际代码的差异集中记录在 §11.1，**以代码为准**。
 
 ---
 
@@ -184,17 +185,20 @@ func ParseSharedFilter(filter string) (group, topic string, err error)
 ```
 
 > **兼容点**：`replicateRoutes()` 目前把整张表 gob 编码进 `ReplicateState("routes", "routes:global", ...)`。表结构一变，滚动升级时新旧节点互相解码会失败。做法：state key 升版本为 `routes:v2`，`ApplyStateEntries` 同时识别 `routes`（旧格式，转成 v2 只读）与 `routes:v2`；新节点默认仍写 v1，直到配置开启 `shared_route_policy=single` 才写 v2。
+>
+> **实现注记**：落地时**未采用**上述复合键与 `routes:v2` 方案。`remoteRoutes` 仍以原始 `$share/<group>/<topic>` 字符串为键，`matchWithGroups()` 只在匹配前于内存中剥离前缀，因此 gob 编码的 `routes` 与旧节点字节兼容，滚动升级无需双读。详见 §11.1。
 
 #### 5.2.2 proto 变更（`pkg/proto/cluster/cluster.proto`）
 
 ```proto
 message PublishForward {
   // ... 现有 1..11 保持不变 ...
-  // shared_group 非空表示这是一次共享订阅组的单选转发：接收节点必须
-  // 把消息交给该组（而非所有匹配订阅者），且不得再次向其它节点广播。
-  string shared_group = 12;
-  // selector_epoch 是发布节点做决策时看到的路由表版本，用于诊断
-  // 成员变更期间的重复/漏投，不参与投递决策。
+  // shared_groups 列出目标节点被选中的共享组；接收节点只投递这些组
+  // （外加普通订阅者），且不得再次向其它节点广播。用列表而非单个组，
+  // 使一个节点被多个组选中时仍只转发一次。
+  repeated string shared_groups = 12;
+  // selector_epoch 是发布节点每次选点时递增的序号，仅用于诊断，
+  // 不参与投递决策（实现中亦标注为 Diagnostic only）。
   uint64 selector_epoch = 13;
 }
 
@@ -302,15 +306,17 @@ func (m *Manager) RouteRemote(topic string, payload []byte, qos byte) {
 `ForwardPublish` handler（`pkg/cluster/server.go:102`）改造：
 
 ```go
-if req.SharedGroup != "" {
-    // 目标节点：只交给该共享组，由本地 topic.Store 的 round-robin 选 1 个成员。
-    s.manager.LocalSharedPublishFunc(req.Topic, req.Payload, byte(req.Qos), req.SharedGroup)
+if len(req.SharedGroups) > 0 {
+    // 目标节点：只交给这些共享组，由本地 topic.Store 的 round-robin 每组选 1 个成员。
+    groups := make(map[string]bool, len(req.SharedGroups))
+    for _, g := range req.SharedGroups { groups[g] = true }
+    s.manager.LocalSharedPublishFunc(req.Topic, req.Payload, byte(req.Qos), groups)
     return &clusterpb.ForwardAck{Success: true}, nil
 }
 // 普通订阅：保持现有 LocalPublishFunc + ToNode 中继逻辑不变。
 ```
 
-`LocalSharedPublishFunc` 是 `Broker` 新增回调，内部走 `b.topics.GetSharedSubscribersForGroup(group, topic)`（新增 API，复用现有 `SharedSubscription.NextIndex` 原子游标），**避免** `GetSubscribers()` 把普通订阅者也带上。
+`LocalSharedPublishFunc` 是 `Broker` 新增回调，内部走 `b.topics.GetSubscribersForGroups(topic, groups)`（新增 API，复用现有 `SharedSubscription.NextIndex` 原子游标），**避免** `GetSubscribers()` 把未选中的共享组也带上。
 
 **降级规则（宁可重复，不可丢失）**
 
@@ -342,8 +348,8 @@ sequenceDiagram
 
     M1->>S: Select("g1", "sensors/temp", [N1,N2,N3], load)
     S-->>M1: "N2"  (least-conn / RR / hash)
-    M1->>M2: gRPC ForwardPublish{SharedGroup="g1", ToNode=""}
-    M2->>ST: GetSharedSubscribersForGroup("g1","sensors/temp")
+    M1->>M2: gRPC ForwardPublish{SharedGroups=["g1"], ToNode=""}
+    M2->>ST: GetSubscribersForGroups("sensors/temp", {"g1"})
     ST-->>M2: 1 个 mailbox (NextIndex 原子轮询)
     M2->>SB: PUBLISH
     Note over M2,SB: 不向其它节点二次广播 → 全集群恰好 1 次投递
@@ -356,13 +362,13 @@ sequenceDiagram
 
 | 场景 | 处理 |
 | --- | --- |
-| 组成员在 3 个节点上下线 | 路由表带 `epoch`；成员变更时递增。选点只读快照，最多一个窗口内不一致，靠 5.5 的 fan-out 兜底避免丢失 |
+| 组成员在 3 个节点上下线 | 选点只读 `NodeLoadTable.Snapshot()` 快照；`selector_epoch` 每次选点递增、仅作诊断。负载缺失或过期时该组退回 fan-out 兜底，避免丢失 |
 | 同一 group 不同 topic filter（`$share/g/a/#` 与 `$share/g/b/#`） | 选点键用 `group` 而非 filter，保证同组消息落到同一节点 |
 | 同一消息同时命中普通订阅和共享订阅 | 两条路径并行，普通 fan-out + 共享单选，互不干扰 |
 | 目标节点 Replicant 无直连 peer | `ToNode` 中继经 Core，保持现有逻辑 |
 | QoS / retained | 沿用现有 `PublishForward` 语义，本设计不引入新的可靠性承诺；单独工单 |
-| `UNSUBSCRIBE` 后陈旧路由 | 既有 union-only 合并缺陷，本设计的 `UnregisterRoute(group, ...)` 会把删除意图编码进 v2 state entry，顺带缓解但不彻底修复 |
-| 热路径内存 | `matchWithGroups` 复用现有 `seen` map 去重，避免每消息分配；`Snapshot()` 返回只读副本，选点不再分配 |
+| `UNSUBSCRIBE` 后陈旧路由 | 既有 union-only 合并缺陷，本期未改动，独立工单 |
+| 热路径内存 | `matchWithGroups` 在锁外以 `sortedCandidates` 排序去重，`routeRemoteSingle` 用 `plans` map 按节点聚合选点结果；`Snapshot()` 返回只读副本，选点全程纯内存、无 RPC |
 
 ---
 
@@ -495,18 +501,19 @@ sequenceDiagram
 
 | 文件 | 变更 | 类型 |
 | --- | --- | --- |
-| `pkg/proto/cluster/cluster.proto` | `PublishForward.shared_group/selector_epoch`、`Route.shared_group`、`SyncNodeStatusResponse.load`、新增 `NodeLoad` | 协议 |
+| `pkg/proto/cluster/cluster.proto` | `PublishForward.shared_groups/selector_epoch`、`Route.shared_group`、`SyncNodeStatusResponse.load`、新增 `NodeLoad` | 协议 |
 | `pkg/proto/cluster/*.pb.go` | 重新生成（`protoc v4.25.1` / `protoc-gen-go v1.36.9`） | 生成物 |
-| `proto/cluster/cluster.proto` | 同步 or 删除（独立 commit 处理残留副本） | 清理 |
-| `pkg/cluster/manager.go` | `RouteKey` 复合键、`matchWithGroups`、`RouteRemote` 分流、`UnregisterRoute` 支持删除意图、`routes:v2` state entry | 核心 |
+| `proto/cluster/cluster.proto` | 保留并标注 `DEPRECATED`，指向唯一真源（独立 commit 处理残留副本） | 清理 |
+| `pkg/cluster/manager.go` | `matchWithGroups`（内存剥离 `$share` 前缀）、`RouteRemote` 分流、`SetBalanceConfig`、`probeLoads` 负载探测 | 核心 |
+| `pkg/cluster/shared_route.go` | 单选转发、按节点聚合 `plans`、stale 时退回 fan-out | 新增 |
 | `pkg/cluster/selector.go` | 新增 `NodeSelector` + 3 种实现 | 新增 |
 | `pkg/cluster/load.go` | 新增 `NodeLoadTable` | 新增 |
-| `pkg/cluster/server.go` | `SyncNodeStatus` 回报 `NodeLoad`；`ForwardPublish` 支持 `SharedGroup` | 核心 |
-| `pkg/broker/broker.go` | `ParseSharedFilter`、SUBSCRIBE 注册带 group、CONNACK `0x9C` + `ServerReference`、`LocalSharedPublishFunc` | 核心 |
-| `pkg/broker/admission.go` / `pkg/balancer/*` | 新增接入层准入控制 | 新增 |
-| `pkg/topic/store.go` | 新增 `GetSharedSubscribersForGroup(group, topic)`（复用原子游标） | API |
+| `pkg/cluster/server.go` | `SyncNodeStatus` 回报 `NodeLoad`；`ForwardPublish` 支持 `SharedGroups` 组作用域投递 | 核心 |
+| `pkg/broker/broker.go` | SUBSCRIBE 注册共享路由、CONNACK `0x9C` + `ServerReference` + 重定向凭证 User Properties、`LocalSharedPublishFunc` | 核心 |
+| `pkg/balancer/*` | 新增接入层准入控制、单跳 HMAC 凭证 | 新增 |
+| `pkg/topic/shared.go` | `ParseSharedFilter`、`GetSubscribersForGroups(topic, groups)`（复用原子游标） | API |
 | `pkg/config/config.go` | `BalanceConfig`、`MQTTAdvertiseAddr` | 配置 |
-| `cmd/grovemq/main.go` | 装配 `NodeLoadTable` / `NodeSelector` / `AdmissionController`、`MQTT_ADVERTISE_ADDR` | 装配 |
+| `cmd/grovemq/main.go` | 通过 `SetBalanceConfig` 配置策略、装配 `AdmissionController`、读取 `MQTT_ADVERTISE_ADDR` / `GROVEMQ_LB_*` | 装配 |
 | `k8s/service.yaml` | 新增 L4 LB Service | 部署 |
 | `k8s/statefulset.yaml` | `MQTT_ADVERTISE_ADDR` via Downward API | 部署 |
 | `docs/guides/DEPLOYMENT.md`、`README.md`、`README.zh-CN.md` | 文档收敛 + 新配置说明 | 文档 |
@@ -525,7 +532,7 @@ sequenceDiagram
 | 集成 | **3 节点、同组 3 成员、发布 100 条 → 恰好 100 次投递**（G1 主验收） | `tests/integration/shared_lb_test.go` |
 | 集成 | 3 节点普通订阅 → 3 次投递（G2 回归） | 同上 |
 | 集成 | 成员上下线、目标节点宕机、Replicant 经 Core 中继 | 同上 |
-| 集成 | 新旧节点混跑（`fanout` vs `single` 策略）、`routes` / `routes:v2` 双向解码 | `tests/integration/` |
+| 集成 | 新旧节点混跑（`fanout` vs `single` 策略）、路由表格式保持基线不变、默认 `fanout` 行为无回归 | `tests/integration/` |
 | 契约 | 现有 `tests/contract` + `tests/unit` 全绿（匿名配置不变） | CI Contract Test job |
 | 竞态 | `go test -race ./pkg/... ./cmd/...`（CI Test job） | CI |
 | E2E | mosquitto / HiveMQ MQTT5 客户端对 `0x9C` + Server Reference 的实际行为 | `tests/e2e/` |
@@ -556,22 +563,23 @@ Dashboard / `clustermon` 若后续接线，可直接消费这些指标；本期�
 
 | # | 风险 | 影响 | 缓解 |
 | --- | --- | --- | --- |
-| R1 | 滚动升级中新旧节点路由表格式不同 | 路由丢失 / 解码失败 | `routes:v2` 双读、新行为默认关闭、灰度开关 |
-| R2 | 共享组选点在成员变更窗口内重复或漏投 | 违反 MQTT 语义 | `epoch` 诊断 + 失败 fan-out 兜底（宁可重复不可丢失） |
+| R1 | 滚动升级中新旧节点路由表格式不同 | 路由丢失 / 解码失败 | 实现未改路由表结构（匹配时内存剥离前缀），格式天然兼容；新行为默认关闭、灰度开关 |
+| R2 | 共享组选点在成员变更窗口内重复或漏投 | 违反 MQTT 语义 | `selector_epoch` 诊断（不参与投递决策）+ 负载缺失/过期整组退回 fan-out 兜底（宁可重复不可丢失） |
 | R3 | `Server Reference` 客户端支持度参差（部分 MQTT5 客户端忽略） | 重定向无效、连接堆积热点 | Mode A 为主路径；`redirect_cooldown` 放行；文档标注已验证客户端 |
 | R4 | 长连接下 least-connections 失真（连接数不等于消息量） | 热点 | 组合 `MaxConnections` 上限、慢启动、后续引入消息速率维度 |
 | R5 | 转发层选点进入 PUBLISH 热路径 | 吞吐下降 | 纯内存 O(N)、无锁读快照、禁 RPC；P99 指标看护 |
-| R6 | `proto/cluster/cluster.proto` 残留副本被误改 | 协议变更静默失效 | 独立 commit 删除/对齐 + pb.go header 校验加入 CI |
+| R6 | `proto/cluster/cluster.proto` 残留副本被误改 | 协议变更静默失效 | 已加 `DEPRECATED` 头注释指向唯一真源；pb.go header 校验待加入 CI |
 | R7 | 跨节点 at-most-once（`PublishForward` 缺字段） | 均衡后丢消息更明显 | **不在本期修**，独立工单；本期不引入新的可靠性承诺 |
-| R8 | `ApplyStateEntries` union-only 合并 | UNSUBSCRIBE 后陈旧路由 | 独立工单；v2 state entry 携带删除意图做部分缓解 |
+| R8 | `ApplyStateEntries` union-only 合并 | UNSUBSCRIBE 后陈旧路由 | 独立工单，本期未改动 |
 | R9 | 重定向环路 / 放大攻击 | 连接风暴 | 单跳 + HMAC token + cooldown + 认证后再判定 |
 | R10 | `MQTT_ADVERTISE_ADDR` 配错（写成 gRPC 地址） | 客户端连不上 | 启动日志打印解析后的 MQTT 端点；配置校验拒绝包含 gRPC 端口 |
 
 ---
 
-## 11. 实施拆分与排期（评审通过后执行）
+## 11. 实施拆分与排期（已执行）
 
-按依赖顺序，**每个 commit 一个英文 log**，与 P0 批次同样的验证流程（`go vet` + 逐包 `-race` + CI）。
+> 下表是当时的拆分计划，实现时按依赖合并为 3 个 commit（见 §11.1）。验证流程不变：
+> `go vet` + 逐包 `-race` + CI（Lint / Test / Contract Test / Build / Docker Build 全绿）。
 
 | # | Commit（英文） | 内容 | 估时 |
 | --- | --- | --- | --- |
@@ -586,17 +594,36 @@ Dashboard / `clustermon` 若后续接线，可直接消费这些指标；本期�
 
 合计约 **4.75 人日**。若只做转发层（#1–#4），约 2.5 人日即可拿到最大收益（修掉跨节点 `$share` 损坏 + 可插拔选点）。
 
+### 11.1 实现状态与设计偏差
+
+实现共 3 个英文 commit，均已在 CI 全绿后合入 `main`：
+
+| Commit | 内容 |
+| --- | --- |
+| `89458cb` | `feat(balance): implement access- and forwarding-layer load balancing` — 转发层与接入层主体 |
+| `6cb7d2f` | `fix(balance): send a clean server reference and enforce one-hop redirect tokens` — 重定向凭证改走 CONNACK User Properties、单跳校验 |
+| `70b8d58` | `fix(balance): wire access-layer admission into broker startup` — 装配 `AdmissionController` 与环境变量 |
+
+正文是设计基线，以下是落地时的**有意偏差**，以代码为准：
+
+1. **路由表未改结构**（§5.2.1）：`RouteKey` 复合键与 `routes:v2` state entry 均未采用。`remoteRoutes` 仍以原始 `$share/<group>/<topic>` 为键，`matchWithGroups()` 只在匹配前于内存中剥离前缀，gob 编码的 `routes` 与旧节点字节兼容，滚动升级无需双读；畸形 `$share` key 有兼容分支，退回历史匹配。`isCorePeerUnsafe()` 用于避免中继选点时的递归 `RLock`。
+2. **`selector_epoch` 是诊断字段**：proto 注释明确 `Diagnostic only; it never participates in the delivery decision`。它在每次 `routeRemoteSingle()` 选点时原子递增，**不是**路由表版本或成员变更版本号，也不参与任何投递 / 一致性决策；成员变更窗口靠"负载缺失或过期即整组退回 fan-out"兜底。
+3. **字段与 API 命名**：`PublishForward.shared_groups` 为 `repeated`（一个节点被多个组选中时只转发一次），而非正文草案里的单数 `shared_group`；`Route.shared_group` 用于路由注册；`ParseSharedFilter()` 落在 `pkg/topic/shared.go`；本地组作用域投递为 `Store.GetSubscribersForGroups(topic, groups)`。
+4. **默认策略**：`GROVEMQ_SHARED_ROUTE_POLICY=fanout` 与 `GROVEMQ_ACCESS_LB=off` 保持基线行为，`single` / `redirect` / `both` 均需显式开启，保证滚动升级安全。
+5. **残留 proto 副本**：`proto/cluster/cluster.proto` 未删除，改为加 `DEPRECATED` 头注释指向唯一真源 `pkg/proto/cluster/cluster.proto`。
+6. **测试位置**：单元测试落在 `pkg/cluster/*_test.go`、`pkg/broker/*_test.go`、`pkg/balancer/admission_test.go`、`pkg/topic/shared_test.go`，而非 §8 表格里规划的 `tests/integration/` 等目录。
+
 ---
 
-## 12. 待评审决策（Open Questions）
+## 12. 已决策事项与遗留问题
 
-1. **#1 是否单独先发？** 它是 bug 修复而非增强，可独立于整套 LB 设计先合入并回补测试；其余等评审。
-2. **负载通道**：复用 `SyncNodeStatus` 捎带（改动小、5s 粒度）vs 新增 `ReportLoad` RPC（更实时）？
-3. **残留 proto 副本**：`proto/cluster/cluster.proto` 直接删除，还是同步维护？（建议删除）
-4. **默认策略切换版本**：`GROVEMQ_SHARED_ROUTE_POLICY` 何时从 `fanout` 切到 `single` 作为默认值？
-5. **Mode B 优先级**：MQTT 5 `Server Reference` 实际客户端支持度有限，是否接受先只交付 Mode A？
-6. **topic 分片 / 一致性哈希分区**：是否纳入下一期，与 `ConsistentHashSelector` 合并设计？
-7. **是否顺带修 R7/R8**（跨节点 QoS 可靠性、路由删除合并）？建议独立工单，避免本期范围膨胀。
+1. **#1 是否单独先发？** 已关闭：落地时未单独拆发，全部并入 `89458cb`。
+2. **负载通道**：已决策：复用 `SyncNodeStatus` 捎带 `NodeLoad`（约 5s 粒度），未新增 `ReportLoad` RPC。
+3. **残留 proto 副本**：已决策：保留 `proto/cluster/cluster.proto` 并加 `DEPRECATED` 头注释，唯一真源为 `pkg/proto/cluster/cluster.proto`。
+4. **默认策略切换版本**：仍待定；当前默认保持 `fanout`，未切换到 `single`。
+5. **Mode B 优先级**：Mode A（L4 Service）与 Mode B（`0x9C` 重定向）均已实现；Mode B 依赖客户端回传 CONNACK User Properties，支持度有限，部署说明见 `docs/guides/DEPLOYMENT.md`。
+6. **topic 分片 / 一致性哈希分区**：仍待定；注意当前 `ConsistentHashSelector` 是 `hash(group) % len(candidates)`，并非带虚拟节点的一致性哈希，节点增减会重映射。
+7. **是否顺带修 R7/R8**（跨节点 QoS 可靠性、路由删除合并）？仍待定，建议独立工单，避免本期范围膨胀。
 
 ---
 
