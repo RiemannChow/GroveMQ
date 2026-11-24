@@ -335,6 +335,9 @@ func New(nodeID string, clusterMgr *cluster.Manager) *Broker {
 	b.hooks = hooks.NewManager()
 	b.hooks.Register(hooks.NewAuditHook())
 	b.hooks.Register(hooks.NewRateLimitHook())
+	// Prevent a client from registering or unregistering another agent's card.
+	// This hook is inert for all non-A2A topics, so it is safe to always enable.
+	b.hooks.Register(hooks.NewA2AIdentityHook())
 	b.hooks.Register(hooks.NewForwardHook(func(topic string, qos byte, payload []byte, retain bool) error {
 		// Raw routing: bypasses OnMessagePublish so forwarded messages do not
 		// re-enter the hook chain (prevents forwarding loops).
