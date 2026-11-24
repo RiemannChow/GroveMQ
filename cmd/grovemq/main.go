@@ -37,14 +37,11 @@ import (
 	"github.com/turtacn/grovemq/pkg/broker"
 	"github.com/turtacn/grovemq/pkg/cluster"
 	"github.com/turtacn/grovemq/pkg/config"
-	"github.com/turtacn/grovemq/pkg/connector"
 	"github.com/turtacn/grovemq/pkg/dashboard"
 	"github.com/turtacn/grovemq/pkg/discovery"
-	"github.com/turtacn/grovemq/pkg/integration"
 	"github.com/turtacn/grovemq/pkg/metrics"
 	"github.com/turtacn/grovemq/pkg/monitor"
 	clusterpb "github.com/turtacn/grovemq/pkg/proto/cluster"
-	"github.com/turtacn/grovemq/pkg/rules"
 	"github.com/turtacn/grovemq/pkg/tls"
 	"google.golang.org/grpc"
 )
@@ -311,14 +308,18 @@ func main() {
 	// Certificate Manager
 	certManager := tls.NewCertificateManager()
 
-	// Connector Manager
-	connectorManager := connector.NewConnectorManager()
-
-	// Rule Engine
-	ruleEngine := rules.NewRuleEngine(connectorManager)
-
-	// Data Integration Engine
-	integrationEngine := integration.NewDataIntegrationEngine()
+	// Connector / rule / integration engines.
+	//
+	// These MUST be the same instances the broker uses on its message hot path.
+	// Previously this entrypoint created fresh instances here and handed them to
+	// the dashboard, while broker.New() created its own copies. As a result rules
+	// and connectors configured from the dashboard were written to one set of
+	// objects but the broker's PUBLISH path read from another, so configuration
+	// silently had no effect. A2A Registry wiring depends on a single shared
+	// instance as well.
+	connectorManager := b.GetConnectorManager()
+	ruleEngine := b.GetRuleEngine()
+	integrationEngine := b.GetIntegrationEngine()
 
 	// Admin API Server
 	adminAPI := admin.NewAPIServer(metricsManager, b)
