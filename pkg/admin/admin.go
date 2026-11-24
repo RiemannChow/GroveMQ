@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,44 @@ type APIServer struct {
 	// It is kept as a separate callback (rather than a BrokerInterface method)
 	// so the admin/dashboard mock brokers need no change.
 	reloadHandler func() error
+
+	// a2aProvider exposes the optional A2A Registry. Nil means the endpoints
+	// return 501 Not Implemented. Kept as a separate interface so existing
+	// BrokerInterface mocks need no change.
+	a2aProvider A2AProvider
+}
+
+// A2AProvider is the minimal surface the admin API needs from the A2A Registry.
+// It is implemented by pkg/a2a/registry.Registry.
+type A2AProvider interface {
+	List() []A2AAgent
+	Get(address string) (*A2AAgent, bool)
+	Delete(address string) bool
+	Stats() A2AStats
+}
+
+// A2AAgent is the API representation of a registered agent.
+type A2AAgent struct {
+	Address      string      `json:"address"`
+	OrgID        string      `json:"org_id"`
+	UnitID       string      `json:"unit_id"`
+	AgentID      string      `json:"agent_id"`
+	Card         interface{} `json:"card"`
+	Status       string      `json:"status"`
+	StatusSource string      `json:"status_source"`
+	RegisteredAt time.Time   `json:"registered_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
+}
+
+// A2AStats is the API representation of registry counters.
+type A2AStats struct {
+	Enabled         bool  `json:"enabled"`
+	Registered      int   `json:"registered"`
+	Online          int   `json:"online"`
+	Offline         int   `json:"offline"`
+	ValidationFails int64 `json:"validation_failures"`
+	RateLimited     int64 `json:"rate_limited"`
+	RejectedBySize  int64 `json:"rejected_by_size"`
 }
 
 // GetBroker returns the underlying broker interface, allowing other surfaces
@@ -163,6 +202,12 @@ func (s *APIServer) SetReloadHandler(fn func() error) {
 	s.reloadHandler = fn
 }
 
+// SetA2AProvider enables the A2A Registry endpoints. Passing nil disables
+// them (handlers return 501), which is the default when the Registry is off.
+func (s *APIServer) SetA2AProvider(p A2AProvider) {
+	s.a2aProvider = p
+}
+
 // RegisterRoutes registers all API routes
 func (s *APIServer) RegisterRoutes(mux *http.ServeMux) {
 	// Statistics and metrics endpoints
@@ -207,6 +252,72 @@ func (s *APIServer) RegisterRoutes(mux *http.ServeMux) {
 	// Config hot-reload endpoint (emqx ctl-style). Disabled unless a reload
 	// handler is registered by main.go.
 	mux.HandleFunc("/api/v5/reload", s.handleReload)
+
+	// A2A Registry endpoints. Disabled (501) unless a provider is set.
+	mux.HandleFunc("/api/v5/a2a/agents", s.handleA2AAgents)
+	mux.HandleFunc("/api/v5/a2a/agents/", s.handleA2AAgentByAddress)
+	mux.HandleFunc("/api/v5/a2a/stats", s.handleA2AStats)
+}
+
+func (s *APIServer) handleA2AAgents(w http.ResponseWriter, r *http.Request) {
+	if s.a2aProvider == nil {
+		s.writeError(w, http.StatusNotImplemented, "A2A Registry is not enabled")
+		return
+	}
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	s.writeSuccess(w, s.a2aProvider.List())
+}
+
+func (s *APIServer) handleA2AAgentByAddress(w http.ResponseWriter, r *http.Request) {
+	if s.a2aProvider == nil {
+		s.writeError(w, http.StatusNotImplemented, "A2A Registry is not enabled")
+		return
+	}
+	address := strings.TrimPrefix(r.URL.Path, "/api/v5/a2a/agents/")
+	if address == "" {
+		s.writeError(w, http.StatusBadRequest, "Agent address is required")
+		return
+	}
+	// MQTT addresses contain '/', which clients must encode as '%2F' when
+	// placing them in the final URL path segment.
+	decoded, err := url.PathUnescape(address)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid agent address encoding")
+		return
+	}
+	address = decoded
+	switch r.Method {
+	case http.MethodGet:
+		agent, ok := s.a2aProvider.Get(address)
+		if !ok {
+			s.writeError(w, http.StatusNotFound, "Agent not found")
+			return
+		}
+		s.writeSuccess(w, agent)
+	case http.MethodDelete:
+		if !s.a2aProvider.Delete(address) {
+			s.writeError(w, http.StatusNotFound, "Agent not found")
+			return
+		}
+		s.writeSuccess(w, map[string]string{"result": "unregistered"})
+	default:
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+func (s *APIServer) handleA2AStats(w http.ResponseWriter, r *http.Request) {
+	if s.a2aProvider == nil {
+		s.writeError(w, http.StatusNotImplemented, "A2A Registry is not enabled")
+		return
+	}
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	s.writeSuccess(w, s.a2aProvider.Stats())
 }
 
 // handleStats handles /api/v5/stats endpoint

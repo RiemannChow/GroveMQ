@@ -117,6 +117,12 @@ type Broker struct {
 	// Decision hooks (connect/publish) may reject; notification hooks are async.
 	hooks *hooks.Manager
 
+	// RetainedAnnotationFunc, when set, is called for every retained message
+	// delivered to a new subscriber. It allows optional features (e.g. the A2A
+	// Registry) to attach MQTT 5.0 user properties such as a2a-status without
+	// the broker depending on those features. Nil = no annotation.
+	RetainedAnnotationFunc func(topic string, props map[string][]byte) map[string][]byte
+
 	// Republish callback for rule engine
 	republishCallback func(topic string, qos int, payload []byte) error
 
@@ -3032,13 +3038,20 @@ func (b *Broker) sendRetainedMessages(sessionMailbox *actor.Mailbox, filters []p
 				effectiveQoS = filter.Qos
 			}
 
+			// Let optional features annotate the retained message (e.g. A2A
+			// Registry attaching a2a-status). Nil func = zero overhead.
+			deliveryProps := retainedMsg.UserProperties
+			if b.RetainedAnnotationFunc != nil {
+				deliveryProps = b.RetainedAnnotationFunc(retainedMsg.Topic, deliveryProps)
+			}
+
 			// Create session message
 			pubMsg := session.Publish{
 				Topic:          retainedMsg.Topic,
 				Payload:        retainedMsg.Payload,
 				QoS:            effectiveQoS,
 				Retain:         true, // Mark as retained message
-				UserProperties: retainedMsg.UserProperties,
+				UserProperties: deliveryProps,
 			}
 
 			// Send to subscriber's mailbox
