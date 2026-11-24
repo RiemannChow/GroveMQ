@@ -65,6 +65,8 @@ Test reports, status updates, and historical records.
 
 | Document | Description |
 |----------|-------------|
+| [A2A_OVER_MQTT_SPEC.md](design/A2A_OVER_MQTT_SPEC.md) | A2A over MQTT wire contract (v1) |
+| [A2A_P0_BASELINE.md](testing/A2A_P0_BASELINE.md) | A2A P0 performance baseline |
 | [PLAN.md](planning/PLAN.md) | Phased implementation plan |
 | [TODO.md](planning/TODO.md) | TODO list and tasks |
 | [GIT_COMMIT_MESSAGE.md](planning/GIT_COMMIT_MESSAGE.md) | Git commit message guidelines |
