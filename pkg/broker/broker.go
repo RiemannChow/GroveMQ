@@ -2426,7 +2426,7 @@ func (b *Broker) processPublishPostAck(clientID, resolvedTopic string, payload [
 	if retain {
 		log.Printf("[DEBUG] PUBLISH with RETAIN flag from client %s to topic %s", clientID, resolvedTopic)
 		ctx := context.Background()
-		if err := b.retainer.StoreRetained(ctx, resolvedTopic, payload, publishQoS, clientID); err != nil {
+		if err := b.retainer.StoreRetainedWithProperties(ctx, resolvedTopic, payload, publishQoS, clientID, userProperties); err != nil {
 			log.Printf("[ERROR] Failed to store retained message: %v", err)
 		} else {
 			log.Printf("[INFO] Stored retained message for topic %s (payload size: %d)", resolvedTopic, len(payload))
@@ -3035,7 +3035,7 @@ func (b *Broker) sendRetainedMessages(sessionMailbox *actor.Mailbox, filters []p
 				Payload:        retainedMsg.Payload,
 				QoS:            effectiveQoS,
 				Retain:         true, // Mark as retained message
-				UserProperties: nil,  // Retained messages don't currently store user properties
+				UserProperties: retainedMsg.UserProperties,
 			}
 
 			// Send to subscriber's mailbox

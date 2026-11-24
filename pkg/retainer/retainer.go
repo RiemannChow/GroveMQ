@@ -36,6 +36,12 @@ type RetainedMessage struct {
 	ExpiryTime *time.Time        `json:"expiry_time,omitempty"`
 	ClientID   string            `json:"client_id,omitempty"`
 	Headers    map[string]string `json:"headers,omitempty"`
+
+	// UserProperties are the MQTT 5.0 user properties from the original
+	// retained PUBLISH. They are delivered to new subscribers alongside the
+	// payload. A2A over MQTT relies on this to attach a2a-status metadata to
+	// registered Agent Cards.
+	UserProperties map[string][]byte `json:"user_properties,omitempty"`
 }
 
 // Config defines retainer configuration
@@ -98,8 +104,17 @@ func New(storage messages.StorageBackend, config *Config) *Retainer {
 	return r
 }
 
-// StoreRetained stores a retained message
+// StoreRetained stores a retained message without MQTT 5.0 user properties.
+// Kept for backward compatibility; new callers should use
+// StoreRetainedWithProperties when the PUBLISH carries user properties.
 func (r *Retainer) StoreRetained(ctx context.Context, topic string, payload []byte, qos byte, clientID string) error {
+	return r.StoreRetainedWithProperties(ctx, topic, payload, qos, clientID, nil)
+}
+
+// StoreRetainedWithProperties stores a retained message together with the
+// MQTT 5.0 user properties from the original PUBLISH. Empty payload still
+// clears the retained message, matching MQTT semantics.
+func (r *Retainer) StoreRetainedWithProperties(ctx context.Context, topic string, payload []byte, qos byte, clientID string, userProperties map[string][]byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -128,9 +143,10 @@ func (r *Retainer) StoreRetained(ctx context.Context, topic string, payload []by
 		Topic:     topic,
 		Payload:   payload,
 		QoS:       qos,
-		Retained:  true,
-		Timestamp: time.Now(),
-		ClientID:  clientID,
+		Retained:       true,
+		Timestamp:      time.Now(),
+		ClientID:       clientID,
+		UserProperties: cloneUserProperties(userProperties),
 	}
 
 	// Set expiry time if configured
@@ -168,8 +184,9 @@ func (r *Retainer) GetRetainedMessages(ctx context.Context, topicFilter string) 
 			QoS:        msg.QoS,
 			Timestamp:  msg.Timestamp,
 			ExpiryTime: msg.ExpiryTime,
-			ClientID:   msg.ClientID,
-			Headers:    msg.Headers,
+			ClientID:       msg.ClientID,
+			Headers:        msg.Headers,
+			UserProperties: cloneUserProperties(msg.UserProperties),
 		}
 		result = append(result, retainedMsg)
 	}
@@ -317,6 +334,19 @@ func MatchTopicFilter(topic, filter string) bool {
 	}
 
 	return true
+}
+
+// cloneUserProperties makes a defensive copy so callers cannot mutate stored
+// retained metadata after the fact (important for A2A status annotations).
+func cloneUserProperties(src map[string][]byte) map[string][]byte {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string][]byte, len(src))
+	for k, v := range src {
+		out[k] = append([]byte(nil), v...)
+	}
+	return out
 }
 
 // generateMessageID creates a unique message identifier

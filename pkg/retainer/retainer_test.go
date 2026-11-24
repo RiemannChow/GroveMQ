@@ -63,6 +63,40 @@ func TestRetainerStoreAndGetRetained(t *testing.T) {
 	assert.False(t, msg.Timestamp.IsZero())
 }
 
+func TestRetainerUserPropertiesRoundTrip(t *testing.T) {
+	retainer := createTestRetainer(t)
+	defer retainer.Close()
+
+	ctx := context.Background()
+	topic := "$a2a/v1/discovery/com.example/factory-a/agent-001"
+	props := map[string][]byte{
+		"a2a-status":        []byte("online"),
+		"a2a-status-source": []byte("broker"),
+	}
+
+	err := retainer.StoreRetainedWithProperties(ctx, topic, []byte("card"), 1, "com.example/factory-a/agent-001", props)
+	assert.NoError(t, err)
+
+	// Mutating the caller's map must not affect the stored copy.
+	props["a2a-status"] = []byte("offline")
+
+	msgs, err := retainer.GetRetainedMessages(ctx, topic)
+	assert.NoError(t, err)
+	if assert.Len(t, msgs, 1) {
+		assert.Equal(t, []byte("online"), msgs[0].UserProperties["a2a-status"])
+		assert.Equal(t, []byte("broker"), msgs[0].UserProperties["a2a-status-source"])
+	}
+
+	// Legacy StoreRetained keeps working and stores no properties.
+	err = retainer.StoreRetained(ctx, "test/legacy", []byte("v"), 0, "client")
+	assert.NoError(t, err)
+	legacy, err := retainer.GetRetainedMessages(ctx, "test/legacy")
+	assert.NoError(t, err)
+	if assert.Len(t, legacy, 1) {
+		assert.Empty(t, legacy[0].UserProperties)
+	}
+}
+
 func TestRetainerDeleteRetained(t *testing.T) {
 	retainer := createTestRetainer(t)
 	defer retainer.Close()
