@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -344,6 +345,9 @@ func New(nodeID string, clusterMgr *cluster.Manager) *Broker {
 	// Prevent a client from registering or unregistering another agent's card.
 	// This hook is inert for all non-A2A topics, so it is safe to always enable.
 	b.hooks.Register(hooks.NewA2AIdentityHook())
+	// Validate A2A JSON-RPC request envelopes so semantic errors can travel
+	// back in PUBACK/PUBREC reason codes and a2a-error user properties.
+	b.hooks.Register(hooks.NewA2ATaskHook())
 	b.hooks.Register(hooks.NewForwardHook(func(topic string, qos byte, payload []byte, retain bool) error {
 		// Raw routing: bypasses OnMessagePublish so forwarded messages do not
 		// re-enter the hook chain (prevents forwarding loops).
@@ -1913,11 +1917,20 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 					} else {
 						respType = packets.Pubrec
 					}
+					reasonCode := byte(0x87) // Not authorized
+					var ackProps packets.Properties
+					if res != nil {
+						if res.ReasonCode != nil {
+							reasonCode = *res.ReasonCode
+						}
+						ackProps = publishAckProperties(res.UserProperties)
+					}
 					resp := packets.Packet{
 						FixedHeader:     packets.FixedHeader{Type: respType},
 						PacketID:        pk.PacketID,
 						ProtocolVersion: pk.ProtocolVersion,
-						ReasonCode:      0x87, // Not authorized
+						ReasonCode:      reasonCode,
+						Properties:      ackProps,
 					}
 					writePacket(conn, &resp)
 				}
@@ -2455,6 +2468,24 @@ func (b *Broker) processPublishPostAck(clientID, resolvedTopic string, payload [
 	if err := b.offlineMessageMgr.QueueMessageForOfflineClients(resolvedTopic, payload, publishQoS, retain, matcher); err != nil {
 		log.Printf("[ERROR] Failed to queue message for offline clients: %v", err)
 	}
+}
+
+// publishAckProperties converts hook-provided user properties into MQTT v5
+// PUBACK/PUBREC properties. Keys are sorted for deterministic wire output.
+func publishAckProperties(props map[string][]byte) packets.Properties {
+	if len(props) == 0 {
+		return packets.Properties{}
+	}
+	keys := make([]string, 0, len(props))
+	for k := range props {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	user := make([]packets.UserProperty, 0, len(keys))
+	for _, k := range keys {
+		user = append(user, packets.UserProperty{Key: k, Val: string(props[k])})
+	}
+	return packets.Properties{User: user}
 }
 
 func copyUserProperties(props map[string][]byte) map[string][]byte {

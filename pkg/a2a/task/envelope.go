@@ -17,6 +17,7 @@ package task
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -95,6 +96,37 @@ func ParseRequest(data []byte) (*Request, error) {
 		return nil, fmt.Errorf("a2a: request id is required")
 	}
 	return &r, nil
+}
+
+// NormalizeMethod maps common SDK aliases onto canonical A2A 1.0 JSON-RPC
+// method names. Unknown methods are returned unchanged so callers can report
+// MethodNotFoundError without losing the original value.
+func NormalizeMethod(method string) string {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "message/send", "sendmessage", "send_message":
+		return MethodMessageSend
+	case "message/stream", "sendstreamingmessage", "send_streaming_message":
+		return MethodMessageStream
+	case "tasks/get", "gettask", "get_task":
+		return MethodTasksGet
+	case "tasks/cancel", "canceltask", "cancel_task":
+		return MethodTasksCancel
+	case "tasks/subscribe", "subscribetotask", "subscribe_to_task":
+		return MethodTasksSubscribe
+	default:
+		return method
+	}
+}
+
+// IsSupportedMethod reports whether method is one of the abstract operations
+// GroveMQ can route over MQTT.
+func IsSupportedMethod(method string) bool {
+	switch NormalizeMethod(method) {
+	case MethodMessageSend, MethodMessageStream, MethodTasksGet, MethodTasksCancel, MethodTasksSubscribe:
+		return true
+	default:
+		return false
+	}
 }
 
 // ParamsInto decodes request params into a caller-provided value.

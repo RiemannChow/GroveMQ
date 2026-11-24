@@ -87,8 +87,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			task.NewError(task.ErrorVersionNotSupported, "unsupported A2A-Version: "+version)))
 		return
 	}
-	method := normalizeMethod(req.Method)
-	if method == "" {
+	method := task.NormalizeMethod(req.Method)
+	if !task.IsSupportedMethod(method) {
 		a2ametrics.IncGatewayRequest(req.Method, "rpc_error")
 		writeRPC(w, http.StatusOK, task.NewSemanticErrorResponse(req.ID,
 			task.NewError(task.ErrorMethodNotFound, "unsupported method: "+req.Method)))
@@ -125,23 +125,4 @@ func propertiesFromHeaders(header http.Header) map[string][]byte {
 		}
 	}
 	return props
-}
-
-// normalizeMethod maps common SDK aliases onto canonical A2A 1.0 JSON-RPC
-// method names. Unknown methods stay empty and are rejected by ServeHTTP.
-func normalizeMethod(method string) string {
-	switch strings.ToLower(strings.TrimSpace(method)) {
-	case "message/send", "sendmessage", "send_message":
-		return task.MethodMessageSend
-	case "message/stream", "sendstreamingmessage", "send_streaming_message":
-		return task.MethodMessageStream
-	case "tasks/get", "gettask", "get_task":
-		return task.MethodTasksGet
-	case "tasks/cancel", "canceltask", "cancel_task":
-		return task.MethodTasksCancel
-	case "tasks/subscribe", "subscribetotask", "subscribe_to_task":
-		return task.MethodTasksSubscribe
-	default:
-		return ""
-	}
 }

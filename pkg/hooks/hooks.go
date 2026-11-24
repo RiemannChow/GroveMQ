@@ -124,9 +124,14 @@ type Decision struct {
 }
 
 // MessagePublishResult is returned by the synchronous OnMessagePublish hook.
+// ReasonCode and UserProperties are optional MQTT v5 metadata for a rejected
+// publish. A nil ReasonCode keeps the broker's default "Not authorized"
+// PUBACK/PUBREC, preserving the behaviour of existing hooks.
 type MessagePublishResult struct {
-	Allow  bool
-	Reason string
+	Allow          bool
+	Reason         string
+	ReasonCode     *byte
+	UserProperties map[string][]byte
 }
 
 // Hook is the minimal identity every hook implements.
