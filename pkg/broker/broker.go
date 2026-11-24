@@ -713,9 +713,10 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 	defer cancel()
 
 	var receivedDisconnectPacket bool // Track if we received a proper DISCONNECT packet
+	var tlsNegotiatedVersion byte = 4
 	for {
 		log.Printf("[DEBUG] About to read packet from TLS %s (clientID: %s)", conn.RemoteAddr(), clientID)
-		pk, err := readPacket(reader)
+		pk, err := readPacket(reader, tlsNegotiatedVersion)
 		if err != nil {
 			log.Printf("[DEBUG] Error reading packet from TLS %s (clientID: %s): %v", conn.RemoteAddr(), clientID, err)
 			if err != io.EOF {
@@ -728,6 +729,7 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 
 		switch pk.FixedHeader.Type {
 		case packets.Connect:
+			tlsNegotiatedVersion = pk.ProtocolVersion
 			clientID = pk.Connect.ClientIdentifier
 			cleanSession := pk.Connect.Clean
 			keepAlive := time.Duration(pk.Connect.Keepalive) * time.Second
@@ -1057,7 +1059,7 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 
 		log.Printf("[DEBUG] About to read packet from %s (clientID: %s)", conn.RemoteAddr(), clientID)
-		pk, err := readPacket(reader)
+		pk, err := readPacket(reader, negotiatedVersion)
 		if err != nil {
 			log.Printf("[DEBUG] Error reading packet from %s (clientID: %s): %v", conn.RemoteAddr(), clientID, err)
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -2875,7 +2877,7 @@ func (b *Broker) SetBalanceConfig(policy, strategy string) {
 }
 
 // readPacket reads a full MQTT packet from a connection.
-func readPacket(r *bufio.Reader) (*packets.Packet, error) {
+func readPacket(r *bufio.Reader, negotiatedVersion byte) (*packets.Packet, error) {
 	fh := new(packets.FixedHeader)
 	b, err := r.ReadByte()
 	if err != nil {
@@ -2908,7 +2910,7 @@ func readPacket(r *bufio.Reader) (*packets.Packet, error) {
 		}
 	}
 
-	pk := &packets.Packet{FixedHeader: *fh}
+	pk := &packets.Packet{FixedHeader: *fh, ProtocolVersion: negotiatedVersion}
 	switch pk.FixedHeader.Type {
 	case packets.Connect:
 		err = pk.ConnectDecode(buf)
