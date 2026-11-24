@@ -354,6 +354,9 @@ func (mb *MemoryBackend) cleanupRoutine() {
 
 // topicMatches checks if a topic matches a filter using MQTT wildcard rules
 func topicMatches(topic, filter string) bool {
+	if !reservedTopicAllowed(topic, filter) {
+		return false
+	}
 	// Exact match
 	if topic == filter {
 		return true
@@ -463,4 +466,17 @@ func (ms *memorySubscription) Close() error {
 	}
 
 	return nil
+}
+
+// reservedTopicAllowed implements the MQTT rule that wildcard filters must not
+// match reserved topics (names beginning with '$'), unless the filter itself
+// explicitly starts with '$'. Exact matches are always allowed.
+func reservedTopicAllowed(topic, filter string) bool {
+	if topic == filter {
+		return true
+	}
+	if len(topic) > 0 && topic[0] == '$' {
+		return len(filter) > 0 && filter[0] == '$'
+	}
+	return true
 }

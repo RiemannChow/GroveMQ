@@ -63,6 +63,40 @@ func TestRetainerStoreAndGetRetained(t *testing.T) {
 	assert.False(t, msg.Timestamp.IsZero())
 }
 
+func TestRetainerUserPropertiesRoundTrip(t *testing.T) {
+	retainer := createTestRetainer(t)
+	defer retainer.Close()
+
+	ctx := context.Background()
+	topic := "$a2a/v1/discovery/com.example/factory-a/agent-001"
+	props := map[string][]byte{
+		"a2a-status":        []byte("online"),
+		"a2a-status-source": []byte("broker"),
+	}
+
+	err := retainer.StoreRetainedWithProperties(ctx, topic, []byte("card"), 1, "com.example/factory-a/agent-001", props)
+	assert.NoError(t, err)
+
+	// Mutating the caller's map must not affect the stored copy.
+	props["a2a-status"] = []byte("offline")
+
+	msgs, err := retainer.GetRetainedMessages(ctx, topic)
+	assert.NoError(t, err)
+	if assert.Len(t, msgs, 1) {
+		assert.Equal(t, []byte("online"), msgs[0].UserProperties["a2a-status"])
+		assert.Equal(t, []byte("broker"), msgs[0].UserProperties["a2a-status-source"])
+	}
+
+	// Legacy StoreRetained keeps working and stores no properties.
+	err = retainer.StoreRetained(ctx, "test/legacy", []byte("v"), 0, "client")
+	assert.NoError(t, err)
+	legacy, err := retainer.GetRetainedMessages(ctx, "test/legacy")
+	assert.NoError(t, err)
+	if assert.Len(t, legacy, 1) {
+		assert.Empty(t, legacy[0].UserProperties)
+	}
+}
+
 func TestRetainerDeleteRetained(t *testing.T) {
 	retainer := createTestRetainer(t)
 	defer retainer.Close()
@@ -216,6 +250,28 @@ func TestRetainerStats(t *testing.T) {
 	assert.Equal(t, uint64(2), stats.RetainedMessages)
 	assert.Equal(t, retainer.config.MaxRetainedMessages, stats.MaxMessages)
 	assert.Equal(t, retainer.config.MaxPayloadSize, stats.MaxPayloadSize)
+}
+
+func TestMatchTopicFilterReservedTopics(t *testing.T) {
+	tests := []struct {
+		topic  string
+		filter string
+		want   bool
+	}{
+		{"$SYS/broker/uptime", "#", false},
+		{"$SYS/broker/uptime", "+/broker/+", false},
+		{"$SYS/broker/uptime", "$SYS/#", true},
+		{"$SYS/broker/uptime", "$SYS/broker/uptime", true},
+		{"$a2a/v1/discovery/org/unit/agent", "#", false},
+		{"$a2a/v1/discovery/org/unit/agent", "$a2a/v1/#", true},
+		{"$a2a/v1/discovery/org/unit/agent", "$a2a/v1/discovery/+/+/+", true},
+		{"sensors/room1/temp", "#", true},
+		{"sensors/room1/temp", "sensors/+/temp", true},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, MatchTopicFilter(tt.topic, tt.filter),
+			"MatchTopicFilter(%q, %q)", tt.topic, tt.filter)
+	}
 }
 
 func TestRetainerCleanupRoutine(t *testing.T) {

@@ -335,6 +335,9 @@ func New(nodeID string, clusterMgr *cluster.Manager) *Broker {
 	b.hooks = hooks.NewManager()
 	b.hooks.Register(hooks.NewAuditHook())
 	b.hooks.Register(hooks.NewRateLimitHook())
+	// Prevent a client from registering or unregistering another agent's card.
+	// This hook is inert for all non-A2A topics, so it is safe to always enable.
+	b.hooks.Register(hooks.NewA2AIdentityHook())
 	b.hooks.Register(hooks.NewForwardHook(func(topic string, qos byte, payload []byte, retain bool) error {
 		// Raw routing: bypasses OnMessagePublish so forwarded messages do not
 		// re-enter the hook chain (prevents forwarding loops).
@@ -2426,7 +2429,7 @@ func (b *Broker) processPublishPostAck(clientID, resolvedTopic string, payload [
 	if retain {
 		log.Printf("[DEBUG] PUBLISH with RETAIN flag from client %s to topic %s", clientID, resolvedTopic)
 		ctx := context.Background()
-		if err := b.retainer.StoreRetained(ctx, resolvedTopic, payload, publishQoS, clientID); err != nil {
+		if err := b.retainer.StoreRetainedWithProperties(ctx, resolvedTopic, payload, publishQoS, clientID, userProperties); err != nil {
 			log.Printf("[ERROR] Failed to store retained message: %v", err)
 		} else {
 			log.Printf("[INFO] Stored retained message for topic %s (payload size: %d)", resolvedTopic, len(payload))
@@ -3035,7 +3038,7 @@ func (b *Broker) sendRetainedMessages(sessionMailbox *actor.Mailbox, filters []p
 				Payload:        retainedMsg.Payload,
 				QoS:            effectiveQoS,
 				Retain:         true, // Mark as retained message
-				UserProperties: nil,  // Retained messages don't currently store user properties
+				UserProperties: retainedMsg.UserProperties,
 			}
 
 			// Send to subscriber's mailbox

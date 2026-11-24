@@ -325,7 +325,14 @@ func (s *Store) RemoveAllSubscriptions(mailbox *actor.Mailbox) []string {
 
 // matchesTopicFilter checks if a published topic matches a subscription topic filter.
 // Implements MQTT 3.1.1 specification for topic matching with wildcards.
+//
+// Per the MQTT spec, a filter beginning with a wildcard must NOT match a topic
+// name beginning with '$' (reserved/system topics such as $SYS and $a2a).
+// An explicit filter that itself starts with '$' still matches normally.
 func matchesTopicFilter(topic, filter string) bool {
+	if !reservedTopicAllowed(topic, filter) {
+		return false
+	}
 	topicSegments := strings.Split(topic, "/")
 	filterSegments := strings.Split(filter, "/")
 
@@ -353,4 +360,17 @@ func matchesTopicFilter(topic, filter string) bool {
 
 	// If we finished iterating through the filter, the topic must have the same number of segments
 	return topicLen == filterLen
+}
+
+// reservedTopicAllowed implements the MQTT rule that wildcard filters must not
+// match reserved topics (names beginning with '$'), unless the filter itself
+// explicitly starts with '$'. Exact matches are always allowed.
+func reservedTopicAllowed(topic, filter string) bool {
+	if topic == filter {
+		return true
+	}
+	if len(topic) > 0 && topic[0] == '$' {
+		return len(filter) > 0 && filter[0] == '$'
+	}
+	return true
 }

@@ -40,6 +40,13 @@ type Message struct {
 	ExpiryTime *time.Time        `json:"expiry_time,omitempty"`
 	ClientID   string            `json:"client_id,omitempty"`
 
+	// UserProperties holds MQTT 5.0 user-defined properties carried with the
+	// original PUBLISH. Retained messages must preserve these so that a broker
+	// can annotate delivered cards (e.g. A2A's a2a-status) on subscription.
+	// map[string][]byte is gob-encodable, so the bbolt and cluster-replication
+	// paths persist and replicate it without further changes.
+	UserProperties map[string][]byte `json:"user_properties,omitempty"`
+
 	// Storage metadata
 	StreamID   string `json:"stream_id,omitempty"`
 	SequenceNo uint64 `json:"sequence_no,omitempty"`

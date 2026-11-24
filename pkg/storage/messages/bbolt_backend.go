@@ -197,6 +197,9 @@ func (n *noOpSubscription) Close() error               { return nil }
 // matchTopicFilter implements basic MQTT topic-filter matching (exact, '#', '+')
 // without importing the retainer package (which would create an import cycle).
 func matchTopicFilter(topic, filter string) bool {
+	if !reservedTopicAllowed(topic, filter) {
+		return false
+	}
 	if topic == filter {
 		return true
 	}
