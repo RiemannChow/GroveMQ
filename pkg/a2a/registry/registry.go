@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	a2ametrics "github.com/turtacn/grovemq/pkg/a2a"
 	"github.com/turtacn/grovemq/pkg/a2a/schema"
 	"github.com/turtacn/grovemq/pkg/hooks"
 )
@@ -155,6 +156,7 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 		r.mu.Lock()
 		r.stats.RejectedBySize++
 		r.mu.Unlock()
+		a2ametrics.IncRegistration("rejected_size")
 		log.Printf("[A2A] rejected card from %s: payload %d bytes exceeds %d", address, len(c.Payload), r.cfg.MaxCardSize)
 		return &hooks.MessagePublishResult{Allow: false, Reason: "a2a: agent card exceeds max_card_size"}, nil
 	}
@@ -163,6 +165,7 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 		r.mu.Lock()
 		r.stats.RateLimited++
 		r.mu.Unlock()
+		a2ametrics.IncRegistration("rate_limited")
 		log.Printf("[A2A] rate-limited card update from %s", address)
 		return &hooks.MessagePublishResult{Allow: false, Reason: "a2a: card update rate limit exceeded"}, nil
 	}
@@ -170,6 +173,7 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 	// Empty payload clears the retained card and unregisters the agent.
 	if len(c.Payload) == 0 {
 		r.Delete(address)
+		a2ametrics.IncRegistration("unregistered")
 		return allow, nil
 	}
 
@@ -178,6 +182,8 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 		r.mu.Lock()
 		r.stats.ValidationFails++
 		r.mu.Unlock()
+		a2ametrics.CardValidationFailures.Inc()
+		a2ametrics.IncRegistration("rejected_invalid")
 		log.Printf("[A2A] rejected card from %s: %v", address, err)
 		return &hooks.MessagePublishResult{Allow: false, Reason: "a2a: invalid agent card: " + err.Error()}, nil
 	}
@@ -205,6 +211,7 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 	r.cards[address] = entry
 	r.mu.Unlock()
 
+	a2ametrics.IncRegistration("registered")
 	log.Printf("[A2A] registered agent %s (%s)", address, card.Name)
 	return allow, nil
 }
@@ -237,9 +244,13 @@ func (r *Registry) setStatus(address, status, source string) {
 	if !ok {
 		return
 	}
+	if e.Status == status && e.StatusSource == source {
+		return
+	}
 	e.Status = status
 	e.StatusSource = source
 	e.UpdatedAt = r.now()
+	a2ametrics.IncStatusChange(status, source)
 }
 
 // allowUpdate implements a per-agent registration rate limit (sliding window).
@@ -314,6 +325,7 @@ func (r *Registry) Stats() Stats {
 		}
 	}
 	st.Registered = len(r.cards)
+	a2ametrics.SetRegistryAgents(st.Registered, st.Online, st.Offline)
 	return st
 }
 

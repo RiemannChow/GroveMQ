@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/turtacn/grovemq/pkg/a2a/gateway"
 	"github.com/turtacn/grovemq/pkg/acl"
 	"github.com/turtacn/grovemq/pkg/admin"
 	"github.com/turtacn/grovemq/pkg/auth/x509"
@@ -58,6 +59,7 @@ type Server struct {
 	templates          *template.Template
 	mux                *http.ServeMux
 	config             *Config
+	a2aGateway         http.Handler // optional A2A JSON-RPC gateway
 }
 
 // Config contains dashboard server configuration
@@ -209,6 +211,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/integration/bridges/", s.authMiddleware(s.handleAPIBridgeByID))
 	s.mux.HandleFunc("/api/integration/connectors", s.authMiddleware(s.handleAPIIntegrationConnectors))
 	s.mux.HandleFunc("/api/integration/metrics", s.authMiddleware(s.handleAPIIntegrationMetrics))
+
+	// A2A JSON-RPC gateway. It is mounted without dashboard session auth so a
+	// standard A2A SDK only needs the endpoint URL. Access must be restricted
+	// with network policy or a reverse proxy when the gateway is enabled.
+	s.mux.HandleFunc(gateway.PathPrefix, s.handleA2AGateway)
 
 	// Proxy admin API endpoints
 	s.mux.Handle("/api/v5/", s.authMiddleware(s.proxyAdminAPI))
@@ -742,6 +749,25 @@ func (s *Server) writeJSONError(w http.ResponseWriter, message string) {
 		"code":    -1,
 		"message": message,
 	})
+}
+
+// SetA2AGateway installs the optional A2A JSON-RPC gateway handler. A nil
+// handler leaves the route installed but returns "not enabled", so HTTP SDKs
+// can discover the endpoint without a second dashboard deployment.
+func (s *Server) SetA2AGateway(h http.Handler) {
+	s.a2aGateway = h
+}
+
+// handleA2AGateway serves the gateway route installed in setupRoutes. The
+// route is intentionally outside authMiddleware: standard A2A SDKs must be
+// able to call it with only the A2A headers, so deployment access control
+// belongs in the network layer or a reverse proxy.
+func (s *Server) handleA2AGateway(w http.ResponseWriter, r *http.Request) {
+	if s.a2aGateway == nil {
+		http.Error(w, "A2A gateway is not enabled", http.StatusNotImplemented)
+		return
+	}
+	s.a2aGateway.ServeHTTP(w, r)
 }
 
 // GetListenAddress returns the server listen address

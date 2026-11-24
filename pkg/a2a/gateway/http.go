@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"strings"
 
+	a2ametrics "github.com/turtacn/grovemq/pkg/a2a"
 	"github.com/turtacn/grovemq/pkg/a2a/schema"
 	"github.com/turtacn/grovemq/pkg/a2a/task"
 	"github.com/turtacn/grovemq/pkg/hooks"
@@ -51,6 +52,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h == nil || h.bridge == nil {
+		a2ametrics.IncGatewayRequest("unknown", "disabled")
 		writeRPC(w, http.StatusNotImplemented, task.NewSemanticErrorResponse(nil,
 			task.NewError(task.ErrorAgentNotAvailable, "A2A gateway is not enabled")))
 		return
@@ -58,6 +60,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	address := strings.Trim(strings.TrimPrefix(r.URL.Path, PathPrefix), "/")
 	if !hooks.ValidA2AAgentAddress(address) {
+		a2ametrics.IncGatewayRequest("unknown", "invalid_address")
 		writeRPC(w, http.StatusBadRequest, task.NewSemanticErrorResponse(nil,
 			task.NewError(task.ErrorInvalidParams, "agent address must be {org}/{unit}/{agent}")))
 		return
@@ -65,24 +68,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxRequestBytes+1))
 	if err != nil || len(body) > MaxRequestBytes {
+		a2ametrics.IncGatewayRequest("unknown", "invalid_request")
 		writeRPC(w, http.StatusBadRequest, task.NewSemanticErrorResponse(nil,
 			task.NewError(task.ErrorInvalidRequest, "request body is unreadable or too large")))
 		return
 	}
 	req, err := task.ParseRequest(body)
 	if err != nil {
+		a2ametrics.IncGatewayRequest("unknown", "invalid_request")
 		writeRPC(w, http.StatusBadRequest, task.NewSemanticErrorResponse(nil,
 			task.NewError(task.ErrorInvalidRequest, err.Error())))
 		return
 	}
 
 	if version := r.Header.Get("A2A-Version"); version != "" && version != schema.ProtocolVersion {
+		a2ametrics.IncGatewayRequest(req.Method, "rpc_error")
 		writeRPC(w, http.StatusOK, task.NewSemanticErrorResponse(req.ID,
 			task.NewError(task.ErrorVersionNotSupported, "unsupported A2A-Version: "+version)))
 		return
 	}
 	method := normalizeMethod(req.Method)
 	if method == "" {
+		a2ametrics.IncGatewayRequest(req.Method, "rpc_error")
 		writeRPC(w, http.StatusOK, task.NewSemanticErrorResponse(req.ID,
 			task.NewError(task.ErrorMethodNotFound, "unsupported method: "+req.Method)))
 		return
@@ -91,9 +98,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.bridge.Request(r.Context(), address, req, propertiesFromHeaders(r.Header))
 	if err != nil {
+		a2ametrics.IncGatewayRequest(method, "transport_error")
 		writeRPC(w, http.StatusBadGateway, task.NewSemanticErrorResponse(req.ID,
 			task.NewError(task.ErrorAgentNotAvailable, err.Error())))
 		return
+	}
+	if resp != nil && resp.Error != nil {
+		a2ametrics.IncGatewayRequest(method, "rpc_error")
+	} else {
+		a2ametrics.IncGatewayRequest(method, "success")
 	}
 	writeRPC(w, http.StatusOK, resp)
 }
@@ -106,7 +119,7 @@ func writeRPC(w http.ResponseWriter, status int, resp *task.Response) {
 
 func propertiesFromHeaders(header http.Header) map[string][]byte {
 	props := make(map[string][]byte)
-	for _, name := range []string{"A2A-Version", "A2A-Extensions", "Content-Type"} {
+	for _, name := range []string{"A2A-Version", "A2A-Extensions", "Authorization", "Content-Type"} {
 		if value := header.Get(name); value != "" {
 			props[name] = []byte(value)
 		}

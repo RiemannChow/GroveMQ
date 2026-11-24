@@ -99,6 +99,17 @@ type A2ARegistryConfig struct {
 	BindingURL       string `yaml:"binding_url" json:"binding_url"`
 }
 
+// A2AGatewayConfig configures the optional HTTP JSON-RPC to MQTT gateway.
+// It lets standard A2A SDKs call agents over /a2a/v1/... without changing
+// their JSON-RPC binding code.
+type A2AGatewayConfig struct {
+	Enabled        bool   `yaml:"enabled" json:"enabled"`
+	MQTTBrokerURL  string `yaml:"mqtt_broker_url" json:"mqtt_broker_url"` // empty = local broker
+	Username       string `yaml:"username" json:"username"`               // MQTT client user for the bridge
+	Password       string `yaml:"password" json:"password"`               // MQTT client password for the bridge
+	TimeoutSeconds int    `yaml:"timeout_seconds" json:"timeout_seconds"` // 0 = 5s
+}
+
 // BalanceConfig groups the access-layer (and forwarding-layer) load-balancing
 // settings introduced by the Mode B design (docs/design/LOAD_BALANCING.md §6.2).
 // All fields are optional: an empty value means "use the built-in default", so
@@ -124,6 +135,7 @@ type BrokerConfig struct {
 	Hooks         HookConfig        `yaml:"hooks" json:"hooks"`
 	Balance       BalanceConfig     `yaml:"balance" json:"balance"`
 	A2ARegistry   A2ARegistryConfig `yaml:"a2a_registry" json:"a2a_registry"`
+	A2AGateway    A2AGatewayConfig  `yaml:"a2a_gateway" json:"a2a_gateway"`
 
 	// MailboxSize is the capacity of each subscriber's delivery mailbox. A
 	// slow or stalled subscriber fills its mailbox; once full, best-effort
@@ -196,6 +208,14 @@ func DefaultConfig() *Config {
 				MaxCardSize:      0, // 0 => package default (65536)
 				RegistrationRate: 0, // 0 => package default (10/min)
 				BindingURL:       "",
+			},
+			// A2A JSON-RPC gateway is OFF by default.
+			A2AGateway: A2AGatewayConfig{
+				Enabled:        false,
+				MQTTBrokerURL:  "",
+				Username:       "",
+				Password:       "",
+				TimeoutSeconds: 5,
 			},
 			// Load balancing defaults are the safe baseline: no new behaviour
 			// during rolling upgrades (design §3 G5).
@@ -344,6 +364,9 @@ func validateConfig(config *Config) error {
 	}
 	if a2a.RegistrationRate < 0 {
 		return fmt.Errorf("a2a_registry.registration_rate_limit must be >= 0, got %d", a2a.RegistrationRate)
+	}
+	if config.Broker.A2AGateway.TimeoutSeconds < 0 {
+		return fmt.Errorf("a2a_gateway.timeout_seconds must be >= 0, got %d", config.Broker.A2AGateway.TimeoutSeconds)
 	}
 
 	// Validate hooks configuration.

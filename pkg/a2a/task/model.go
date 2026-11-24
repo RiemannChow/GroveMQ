@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	a2ametrics "github.com/turtacn/grovemq/pkg/a2a"
 )
 
 // TaskState is the A2A 1.0 TaskState enum.
@@ -91,6 +93,7 @@ type TaskStatus struct {
 type Task struct {
 	ID        string                 `json:"id"`
 	ContextID string                 `json:"contextId,omitempty"`
+	CreatedAt string                 `json:"createdAt,omitempty"`
 	Status    TaskStatus             `json:"status"`
 	Artifacts []Artifact             `json:"artifacts,omitempty"`
 	History   []Message              `json:"history,omitempty"`
@@ -99,12 +102,14 @@ type Task struct {
 
 // NewTask creates a task in SUBMITTED with a UTC RFC3339 timestamp.
 func NewTask(id, contextID string) *Task {
+	now := time.Now().UTC().Format(time.RFC3339)
 	return &Task{
 		ID:        id,
 		ContextID: contextID,
+		CreatedAt: now,
 		Status: TaskStatus{
 			State:     TaskStateSubmitted,
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Timestamp: now,
 		},
 	}
 }
@@ -166,6 +171,12 @@ func (t *Task) Transition(to TaskState) error {
 	}
 	t.Status.State = to
 	t.Status.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	a2ametrics.ObserveTaskState(string(to))
+	if IsTerminal(to) && t.CreatedAt != "" {
+		if created, err := time.Parse(time.RFC3339, t.CreatedAt); err == nil {
+			a2ametrics.ObserveTaskDuration(string(to), time.Since(created))
+		}
+	}
 	return nil
 }
 

@@ -119,6 +119,18 @@ broker:
     registration_rate_limit: 10   # card updates per agent per minute; 0 = unlimited
     binding_url: "mqtt://localhost:1883"
 
+  # --- A2A HTTP JSON-RPC gateway (opt-in, startup-only) ---
+  # Exposes POST /a2a/v1/{org}/{unit}/{agent} on the dashboard port. Standard
+  # A2A SDKs using the JSON-RPC binding can call GroveMQ Agents by changing
+  # only the endpoint URL. Requests are bridged to $a2a/v1/.../requests with
+  # MQTT 5.0 Response Topic and Correlation Data.
+  a2a_gateway:
+    enabled: false
+    mqtt_broker_url: ""       # empty = local mqtt_port
+    username: ""              # optional MQTT client user for the bridge
+    password: ""              # optional MQTT client password for the bridge
+    timeout_seconds: 5        # 0 = built-in default (5s)
+
   # --- Load balancing (docs/design/LOAD_BALANCING.md) ---
   # All fields are optional; omitted values fall back to the same built-in
   # defaults in DefaultConfig(). The defaults introduce no new behaviour,
