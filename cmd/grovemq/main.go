@@ -32,6 +32,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/turtacn/grovemq/pkg/a2a/registry"
+	"github.com/turtacn/grovemq/pkg/a2a/schema"
 	"github.com/turtacn/grovemq/pkg/admin"
 	"github.com/turtacn/grovemq/pkg/balancer"
 	"github.com/turtacn/grovemq/pkg/broker"
@@ -327,6 +329,14 @@ func main() {
 	// admin reload endpoint.
 	adminAPI.SetReloadHandler(reload)
 
+	// --- Configure the optional A2A over MQTT Registry ---
+	// The Registry observes retained Agent Cards on $a2a/v1/discovery/#,
+	// indexes them for the admin API, and annotates retained cards with the
+	// current a2a-status at delivery time. It is completely off by default.
+	if err = configureA2ARegistry(b, adminAPI, cfg.Broker.A2ARegistry); err != nil {
+		log.Fatalf("Failed to configure A2A Registry: %v", err)
+	}
+
 	// Dashboard Server
 	dashboardConfig := dashboard.DefaultConfig()
 	// Use configured dashboard port, falling back to default if not set
@@ -453,6 +463,41 @@ func main() {
 
 	// Block until a shutdown signal cancels the context.
 	<-ctx.Done()
+}
+
+// configureA2ARegistry creates and wires the optional A2A Registry. A disabled
+// configuration leaves the broker and admin API untouched. A2A settings are
+// startup-only: changing them requires a restart, unlike auth/ACL/hooks.
+func configureA2ARegistry(b *broker.Broker, api *admin.APIServer, cfg config.A2ARegistryConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	mode, err := schema.ParseMode(cfg.Validate)
+	if err != nil {
+		return err
+	}
+	r := registry.New(registry.Config{
+		Enabled:       true,
+		Validate:      mode,
+		MaxCardSize:   cfg.MaxCardSize,
+		Registrations: cfg.RegistrationRate,
+		BindingURL:    cfg.BindingURL,
+	})
+	b.GetHooks().Register(r)
+	b.RetainedAnnotationFunc = r.AnnotateRetained
+	api.SetA2AProvider(admin.NewA2AProvider(r))
+	log.Printf("[A2A] Registry enabled: validate=%s max_card_size=%d rate_limit=%d/min binding_url=%s",
+		mode, cfg.MaxCardSize, cfg.RegistrationRate, effectiveBindingURL(cfg.BindingURL))
+	return nil
+}
+
+// effectiveBindingURL mirrors registry.New's default so startup logs show the
+// value agents will actually normalize into their Agent Cards.
+func effectiveBindingURL(configured string) string {
+	if strings.TrimSpace(configured) == "" {
+		return registry.DefaultBindingURL
+	}
+	return configured
 }
 
 // connectToPeers connects to static peer nodes. Each entry is either "id=addr"

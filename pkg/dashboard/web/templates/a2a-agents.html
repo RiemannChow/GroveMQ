@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">GroveMQ Dashboard</div>
+                <nav class="nav">
+                    <a href="/dashboard">Dashboard</a>
+                    <a href="/connections">Connections</a>
+                    <a href="/sessions">Sessions</a>
+                    <a href="/subscriptions">Subscriptions</a>
+                    <a href="/blacklist">Blacklist</a>
+                    <a href="/certificates">Certificates</a>
+                    <a href="/tls-config">TLS Config</a>
+                    <a href="/connectors">Connectors</a>
+                    <a href="/rules">Rules</a>
+                    <a href="/a2a-agents" class="active">A2A Agents</a>
+                    <a href="/monitoring">Monitoring</a>
+                </nav>
+                <div class="user-menu">
+                    <span>Welcome, admin</span>
+                    <a href="/logout" class="btn btn-small">Logout</a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">A2A Agents</h1>
+                <div style="display: flex; gap: 1rem; align-items: center;">
+                    <button id="refresh-btn" class="btn btn-primary btn-small">Refresh</button>
+                    <span style="font-size: 0.9rem; color: #666;">Last updated: {{.CurrentTime}}</span>
+                </div>
+            </div>
+
+            <div id="a2a-notice" class="card" style="display: none; margin-bottom: 1rem; padding: 1rem;"></div>
+
+            <div class="dashboard-grid" style="margin-bottom: 2rem;">
+                <div class="metric-card">
+                    <div class="metric-title">Registered Agents</div>
+                    <div class="metric-value" id="a2a-registered">-</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Online</div>
+                    <div class="metric-value" id="a2a-online">-</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Offline</div>
+                    <div class="metric-value" id="a2a-offline">-</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Validation Failures</div>
+                    <div class="metric-value" id="a2a-validation-failures">-</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Discovered Agents</h2>
+                </div>
+                <div class="card-content">
+                    <div style="overflow-x: auto;">
+                        <table class="table" id="a2a-agents-table">
+                            <thead>
+                                <tr>
+                                    <th>Address</th>
+                                    <th>Name</th>
+                                    <th>Version</th>
+                                    <th>Status</th>
+                                    <th>Status Source</th>
+                                    <th>Skills</th>
+                                    <th>Updated At</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td colspan="8" style="text-align: center; color: #666; padding: 2rem;">
+                                        Loading agents...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/dashboard.js"></script>
+    <script src="/static/js/a2a-agents.js"></script>
+</body>
+</html>

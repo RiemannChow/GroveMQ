@@ -88,6 +88,17 @@ type HookConfig struct {
 	Audit     AuditHookConfig     `yaml:"audit" json:"audit"`
 }
 
+// A2ARegistryConfig configures the optional A2A over MQTT Agent Registry.
+// When Enabled is false (the default) the Registry is not created and no A2A
+// hooks are registered, so ordinary MQTT behaviour is unchanged.
+type A2ARegistryConfig struct {
+	Enabled          bool   `yaml:"enabled" json:"enabled"`
+	Validate         string `yaml:"validate_schema" json:"validate_schema"` // strict | loose
+	MaxCardSize      int    `yaml:"max_card_size" json:"max_card_size"`
+	RegistrationRate int    `yaml:"registration_rate_limit" json:"registration_rate_limit"` // per agent per minute; 0 = unlimited
+	BindingURL       string `yaml:"binding_url" json:"binding_url"`
+}
+
 // BalanceConfig groups the access-layer (and forwarding-layer) load-balancing
 // settings introduced by the Mode B design (docs/design/LOAD_BALANCING.md §6.2).
 // All fields are optional: an empty value means "use the built-in default", so
@@ -102,16 +113,17 @@ type BalanceConfig struct {
 
 // BrokerConfig represents the overall broker configuration
 type BrokerConfig struct {
-	NodeID        string        `yaml:"node_id" json:"node_id"`
-	MQTTPort      string        `yaml:"mqtt_port" json:"mqtt_port"`
-	WebSocketPort string        `yaml:"websocket_port" json:"websocket_port"` // empty = WebSocket gateway disabled
-	GRPCPort      string        `yaml:"grpc_port" json:"grpc_port"`
-	MetricsPort   string        `yaml:"metrics_port" json:"metrics_port"`
-	DashboardPort string        `yaml:"dashboard_port" json:"dashboard_port"`
-	Auth          AuthConfig    `yaml:"auth" json:"auth"`
-	ACL           ACLConfig     `yaml:"acl" json:"acl"`
-	Hooks         HookConfig    `yaml:"hooks" json:"hooks"`
-	Balance       BalanceConfig `yaml:"balance" json:"balance"`
+	NodeID        string            `yaml:"node_id" json:"node_id"`
+	MQTTPort      string            `yaml:"mqtt_port" json:"mqtt_port"`
+	WebSocketPort string            `yaml:"websocket_port" json:"websocket_port"` // empty = WebSocket gateway disabled
+	GRPCPort      string            `yaml:"grpc_port" json:"grpc_port"`
+	MetricsPort   string            `yaml:"metrics_port" json:"metrics_port"`
+	DashboardPort string            `yaml:"dashboard_port" json:"dashboard_port"`
+	Auth          AuthConfig        `yaml:"auth" json:"auth"`
+	ACL           ACLConfig         `yaml:"acl" json:"acl"`
+	Hooks         HookConfig        `yaml:"hooks" json:"hooks"`
+	Balance       BalanceConfig     `yaml:"balance" json:"balance"`
+	A2ARegistry   A2ARegistryConfig `yaml:"a2a_registry" json:"a2a_registry"`
 
 	// MailboxSize is the capacity of each subscriber's delivery mailbox. A
 	// slow or stalled subscriber fills its mailbox; once full, best-effort
@@ -176,6 +188,14 @@ func DefaultConfig() *Config {
 			Hooks: HookConfig{
 				RateLimit: RateLimitHookConfig{Enabled: false, PublishRate: 0, PublishBurst: 0},
 				Audit:     AuditHookConfig{Enabled: false},
+			},
+			// A2A Registry is OFF by default so existing deployments are unchanged.
+			A2ARegistry: A2ARegistryConfig{
+				Enabled:          false,
+				Validate:         "strict",
+				MaxCardSize:      0, // 0 => package default (65536)
+				RegistrationRate: 0, // 0 => package default (10/min)
+				BindingURL:       "",
 			},
 			// Load balancing defaults are the safe baseline: no new behaviour
 			// during rolling upgrades (design §3 G5).
@@ -310,6 +330,20 @@ func validateConfig(config *Config) error {
 		default:
 			return fmt.Errorf("acl rule %d: invalid action %q", i, rule.Action)
 		}
+	}
+
+	// Validate A2A Registry configuration (off by default).
+	a2a := config.Broker.A2ARegistry
+	switch strings.ToLower(strings.TrimSpace(a2a.Validate)) {
+	case "", "strict", "loose":
+	default:
+		return fmt.Errorf("a2a_registry.validate_schema must be strict or loose, got %q", a2a.Validate)
+	}
+	if a2a.MaxCardSize < 0 {
+		return fmt.Errorf("a2a_registry.max_card_size must be >= 0, got %d", a2a.MaxCardSize)
+	}
+	if a2a.RegistrationRate < 0 {
+		return fmt.Errorf("a2a_registry.registration_rate_limit must be >= 0, got %d", a2a.RegistrationRate)
 	}
 
 	// Validate hooks configuration.
