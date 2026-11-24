@@ -14,7 +14,10 @@
 
 package task
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // PropertyAgentError is the MQTT v5 User Property carrying the A2A error name.
 const PropertyAgentError = "a2a-error"
@@ -103,6 +106,12 @@ func (e ErrorName) MQTTReason() byte {
 	default:
 		return ReasonImplementationError
 	}
+}
+
+// NewSemanticErrorResponse builds a JSON-RPC error response from a semantic
+// error, preserving the request ID and stable A2A error code.
+func NewSemanticErrorResponse(id json.RawMessage, sem *SemanticError) *Response {
+	return NewErrorResponse(id, sem.ToRPC())
 }
 
 // ToRPC converts the semantic error into a JSON-RPC error object.
