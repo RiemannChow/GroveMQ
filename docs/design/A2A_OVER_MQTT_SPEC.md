@@ -114,10 +114,10 @@ are accepted in compatibility mode and normalized by the Registry layer.
 
 ---
 
-## 6. Implementation status (P0 foundation)
+## 6. Implementation status (P0 + P1)
 
 This section tracks which parts of the contract are enforced by the current
-code. Registry-level features are intentionally out of scope for P0.
+code. P1 adds the opt-in Registry and its discovery/registration closed loop.
 
 | Contract item | Status |
 |---|---|
@@ -125,10 +125,18 @@ code. Registry-level features are intentionally out of scope for P0.
 | Retained messages preserve MQTT v5 User Properties | Enforced |
 | Discovery topic ↔ Client ID binding | Enforced |
 | Single shared engine instances across broker/dashboard | Enforced |
-| Agent Card schema validation | Pending (Registry, P1) |
-| `a2a-status` annotation at delivery | Pending (Registry, P1) |
+| Agent Card schema validation | Implemented (strict + loose normalization, P1) |
+| Registry index, online-status tracking and rate limits | Implemented (P1) |
+| `a2a-status` annotation at delivery | Implemented (P1) |
+| Admin API, CLI and dashboard discovery views | Implemented (P1) |
 | Task state machine + artifact topics | Pending (P2) |
 | HTTP JSON-RPC gateway | Pending (P2) |
+
+P1 is configured through `broker.a2a_registry` and is disabled by default.
+Enabling it registers the `a2a-registry` hook, attaches status annotations to
+retained discoveries, and exposes `/api/v5/a2a/agents` and `/api/v5/a2a/stats`.
+Configuration is startup-only; auth/ACL/hooks remain the only hot-reloaded
+sections.
 
 ---
 
