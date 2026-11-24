@@ -107,6 +107,18 @@ broker:
       # points:
       #   - on_client_connected
       #   - on_message_publish
+  # --- A2A over MQTT Registry (opt-in, startup-only) ---
+  # When enabled, GroveMQ indexes retained Agent Cards published to
+  # $a2a/v1/discovery/{org}/{unit}/{agent} and exposes them at
+  # /api/v5/a2a/agents. The MQTT client ID must match the agent address.
+  # Changing this block requires a broker restart (not a hot reload).
+  a2a_registry:
+    enabled: false
+    validate_schema: strict       # strict (A2A 1.0) | loose (EMQX-style cards)
+    max_card_size: 65536          # bytes; 0 applies the built-in default
+    registration_rate_limit: 10   # card updates per agent per minute; 0 = unlimited
+    binding_url: "mqtt://localhost:1883"
+
   # --- Load balancing (docs/design/LOAD_BALANCING.md) ---
   # All fields are optional; omitted values fall back to the same built-in
   # defaults in DefaultConfig(). The defaults introduce no new behaviour,

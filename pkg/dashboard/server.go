@@ -165,6 +165,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/connectors", s.authMiddleware(s.handleConnectors))
 	s.mux.HandleFunc("/rules", s.authMiddleware(s.handleRules))
 	s.mux.HandleFunc("/integration", s.authMiddleware(s.handleIntegration))
+	s.mux.HandleFunc("/a2a-agents", s.authMiddleware(s.handleA2AAgents))
 
 	// Authentication
 	s.mux.HandleFunc("/login", s.handleLogin)
@@ -1638,6 +1639,26 @@ func (s *Server) getIntegrationData() map[string]interface{} {
 		"Bridges": bridges,
 		"Count":   len(bridges),
 		"Metrics": metrics,
+	}
+}
+
+// A2A Registry Handlers
+
+// handleA2AAgents serves the A2A agent discovery page. Card data is loaded by
+// the page script from the proxied /api/v5/a2a endpoints so this route only
+// needs to render the shell.
+func (s *Server) handleA2AAgents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.renderTemplate(w, "a2a-agents.html", s.getA2AAgentsData())
+}
+
+func (s *Server) getA2AAgentsData() map[string]interface{} {
+	return map[string]interface{}{
+		"Title":       "A2A Agents - GroveMQ",
+		"CurrentTime": time.Now().Format("2006-01-02 15:04:05"),
 	}
 }
 
