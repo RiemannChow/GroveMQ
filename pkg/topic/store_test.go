@@ -124,3 +124,23 @@ func TestSharedSubscriptionConcurrentSelection(t *testing.T) {
 	}
 	assert.Equal(t, int64(goroutines*iterations), total, "every publish must select exactly one subscriber")
 }
+
+func TestMatchesTopicFilterReservedTopics(t *testing.T) {
+	tests := []struct {
+		topic  string
+		filter string
+		want   bool
+	}{
+		{"$SYS/broker/uptime", "#", false},
+		{"$SYS/broker/uptime", "+/broker/+", false},
+		{"$SYS/broker/uptime", "$SYS/#", true},
+		{"$a2a/v1/discovery/org/unit/agent", "#", false},
+		{"$a2a/v1/discovery/org/unit/agent", "$a2a/v1/#", true},
+		{"sensors/room1/temp", "#", true},
+		{"sensors/room1/temp", "sensors/+/temp", true},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, matchesTopicFilter(tt.topic, tt.filter),
+			"matchesTopicFilter(%q, %q)", tt.topic, tt.filter)
+	}
+}

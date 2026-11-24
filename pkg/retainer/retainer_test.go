@@ -252,6 +252,28 @@ func TestRetainerStats(t *testing.T) {
 	assert.Equal(t, retainer.config.MaxPayloadSize, stats.MaxPayloadSize)
 }
 
+func TestMatchTopicFilterReservedTopics(t *testing.T) {
+	tests := []struct {
+		topic  string
+		filter string
+		want   bool
+	}{
+		{"$SYS/broker/uptime", "#", false},
+		{"$SYS/broker/uptime", "+/broker/+", false},
+		{"$SYS/broker/uptime", "$SYS/#", true},
+		{"$SYS/broker/uptime", "$SYS/broker/uptime", true},
+		{"$a2a/v1/discovery/org/unit/agent", "#", false},
+		{"$a2a/v1/discovery/org/unit/agent", "$a2a/v1/#", true},
+		{"$a2a/v1/discovery/org/unit/agent", "$a2a/v1/discovery/+/+/+", true},
+		{"sensors/room1/temp", "#", true},
+		{"sensors/room1/temp", "sensors/+/temp", true},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, MatchTopicFilter(tt.topic, tt.filter),
+			"MatchTopicFilter(%q, %q)", tt.topic, tt.filter)
+	}
+}
+
 func TestRetainerCleanupRoutine(t *testing.T) {
 	config := DefaultConfig()
 	config.MessageExpiryInterval = 50 * time.Millisecond

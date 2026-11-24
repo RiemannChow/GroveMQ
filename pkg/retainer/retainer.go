@@ -289,6 +289,9 @@ func (r *Retainer) cleanupExpiredMessages() {
 // - # matches any topics at that level and below
 // - + matches any single topic level
 func MatchTopicFilter(topic, filter string) bool {
+	if !reservedTopicAllowed(topic, filter) {
+		return false
+	}
 	// Exact match
 	if topic == filter {
 		return true
@@ -333,6 +336,19 @@ func MatchTopicFilter(topic, filter string) bool {
 		}
 	}
 
+	return true
+}
+
+// reservedTopicAllowed implements the MQTT rule that wildcard filters must not
+// match reserved topics (names beginning with '$'), unless the filter itself
+// explicitly starts with '$'. Exact matches are always allowed.
+func reservedTopicAllowed(topic, filter string) bool {
+	if topic == filter {
+		return true
+	}
+	if len(topic) > 0 && topic[0] == '$' {
+		return len(filter) > 0 && filter[0] == '$'
+	}
 	return true
 }
 
