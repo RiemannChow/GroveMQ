@@ -53,6 +53,15 @@ type AgentSkill struct {
 	Tags        []string `json:"tags"`
 }
 
+// AgentCardSignature is a flattened RFC 7515 JWS over the canonical card.
+// Security-critical header values (alg, kid, jku) must appear in Protected;
+// the unprotected Header is carried only for round-trip compatibility.
+type AgentCardSignature struct {
+	Protected string                 `json:"protected"`
+	Signature string                 `json:"signature"`
+	Header    map[string]interface{} `json:"header,omitempty"`
+}
+
 // AgentCard is an agent's self-description. This mirrors the A2A 1.0 fields
 // relevant to discovery; unknown fields are preserved on round-trip only in
 // normalized form (extra fields are not retained).
@@ -66,6 +75,14 @@ type AgentCard struct {
 	DefaultInputModes   []string          `json:"defaultInputModes,omitempty"`
 	DefaultOutputModes  []string          `json:"defaultOutputModes,omitempty"`
 	Skills              []AgentSkill      `json:"skills"`
+
+	// Security metadata follows A2A 1.0: securitySchemes is a scheme-name keyed
+	// map and security/securityRequirements are requirement objects. Both JSON
+	// spellings are accepted because SDKs differ on the proto JSON name.
+	SecuritySchemes      map[string]json.RawMessage `json:"securitySchemes,omitempty"`
+	Security             []map[string][]string      `json:"security,omitempty"`
+	SecurityRequirements []map[string][]string      `json:"securityRequirements,omitempty"`
+	Signatures           []AgentCardSignature       `json:"signatures,omitempty"`
 }
 
 // ValidationMode selects how strictly a published card is checked.
@@ -190,6 +207,15 @@ func Normalize(card *AgentCard, bindingURL string) *AgentCard {
 	out.DefaultInputModes = append([]string(nil), card.DefaultInputModes...)
 	out.DefaultOutputModes = append([]string(nil), card.DefaultOutputModes...)
 	out.SupportedInterfaces = append([]AgentInterface(nil), card.SupportedInterfaces...)
+	out.Security = append([]map[string][]string(nil), card.Security...)
+	out.SecurityRequirements = append([]map[string][]string(nil), card.SecurityRequirements...)
+	out.Signatures = append([]AgentCardSignature(nil), card.Signatures...)
+	if card.SecuritySchemes != nil {
+		out.SecuritySchemes = make(map[string]json.RawMessage, len(card.SecuritySchemes))
+		for k, v := range card.SecuritySchemes {
+			out.SecuritySchemes[k] = append(json.RawMessage(nil), v...)
+		}
+	}
 
 	if len(out.SupportedInterfaces) == 0 {
 		url := card.URL

@@ -118,6 +118,8 @@ broker:
     max_card_size: 65536          # bytes; 0 applies the built-in default
     registration_rate_limit: 10   # card updates per agent per minute; 0 = unlimited
     binding_url: "mqtt://localhost:1883"
+    require_security_metadata: false # require securitySchemes/security and a JWS signature
+    allowed_jku_prefixes: []         # exact URL prefixes trusted for JWKS fetches
 
   # --- A2A HTTP JSON-RPC gateway (opt-in, startup-only) ---
   # Exposes POST /a2a/v1/{org}/{unit}/{agent} on the dashboard port. Standard

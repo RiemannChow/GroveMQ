@@ -484,6 +484,10 @@ func configureA2ARegistry(b *broker.Broker, api *admin.APIServer, cfg config.A2A
 		MaxCardSize:   cfg.MaxCardSize,
 		Registrations: cfg.RegistrationRate,
 		BindingURL:    cfg.BindingURL,
+		Security: &schema.SecurityConfig{
+			RequireMetadata:    cfg.RequireSecurityMetadata,
+			AllowedJKUPrefixes: cfg.AllowedJKUPrefixes,
+		},
 	})
 	b.GetHooks().Register(r)
 	b.RetainedAnnotationFunc = r.AnnotateRetained

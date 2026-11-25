@@ -92,11 +92,13 @@ type HookConfig struct {
 // When Enabled is false (the default) the Registry is not created and no A2A
 // hooks are registered, so ordinary MQTT behaviour is unchanged.
 type A2ARegistryConfig struct {
-	Enabled          bool   `yaml:"enabled" json:"enabled"`
-	Validate         string `yaml:"validate_schema" json:"validate_schema"` // strict | loose
-	MaxCardSize      int    `yaml:"max_card_size" json:"max_card_size"`
-	RegistrationRate int    `yaml:"registration_rate_limit" json:"registration_rate_limit"` // per agent per minute; 0 = unlimited
-	BindingURL       string `yaml:"binding_url" json:"binding_url"`
+	Enabled                 bool     `yaml:"enabled" json:"enabled"`
+	Validate                string   `yaml:"validate_schema" json:"validate_schema"` // strict | loose
+	MaxCardSize             int      `yaml:"max_card_size" json:"max_card_size"`
+	RegistrationRate        int      `yaml:"registration_rate_limit" json:"registration_rate_limit"` // per agent per minute; 0 = unlimited
+	BindingURL              string   `yaml:"binding_url" json:"binding_url"`
+	RequireSecurityMetadata bool     `yaml:"require_security_metadata" json:"require_security_metadata"`
+	AllowedJKUPrefixes      []string `yaml:"allowed_jku_prefixes" json:"allowed_jku_prefixes"`
 }
 
 // A2AGatewayConfig configures the optional HTTP JSON-RPC to MQTT gateway.
@@ -203,11 +205,13 @@ func DefaultConfig() *Config {
 			},
 			// A2A Registry is OFF by default so existing deployments are unchanged.
 			A2ARegistry: A2ARegistryConfig{
-				Enabled:          false,
-				Validate:         "strict",
-				MaxCardSize:      0, // 0 => package default (65536)
-				RegistrationRate: 0, // 0 => package default (10/min)
-				BindingURL:       "",
+				Enabled:                 false,
+				Validate:                "strict",
+				MaxCardSize:             0, // 0 => package default (65536)
+				RegistrationRate:        0, // 0 => package default (10/min)
+				BindingURL:              "",
+				RequireSecurityMetadata: false,
+				AllowedJKUPrefixes:      nil,
 			},
 			// A2A JSON-RPC gateway is OFF by default.
 			A2AGateway: A2AGatewayConfig{

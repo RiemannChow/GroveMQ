@@ -178,3 +178,18 @@ func TestRegistryIgnoresNonDiscoveryTopics(t *testing.T) {
 	assert.Equal(t, 0, r.Stats().Registered)
 	assert.Equal(t, int64(0), r.Stats().ValidationFails)
 }
+
+func TestRegistryRequiresSignedCardWhenConfigured(t *testing.T) {
+	cfg := *DefaultConfig()
+	cfg.Validate = schema.ModeLoose
+	cfg.Security = &schema.SecurityConfig{RequireMetadata: true}
+	r := New(cfg)
+	addr := "org/unit/agent"
+	topic := hooks.A2ADiscoveryPrefix + addr
+
+	assert.False(t, publish(t, r, addr, topic, []byte(validCard)))
+	_, ok := r.Get(addr)
+	assert.False(t, ok)
+	assert.Equal(t, int64(1), r.Stats().SignatureFails)
+	assert.Equal(t, int64(1), r.Stats().ValidationFails)
+}

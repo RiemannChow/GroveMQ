@@ -21,6 +21,7 @@ package registry
 
 import (
 	"context"
+	stderrors "errors"
 	"log"
 	"sort"
 	"strings"
@@ -53,6 +54,7 @@ type Config struct {
 	MaxCardSize   int
 	Registrations int // max card updates per agent per minute; 0 = unlimited
 	BindingURL    string
+	Security      *schema.SecurityConfig // nil disables signature verification
 }
 
 // DefaultConfig returns a disabled Registry with safe defaults.
@@ -81,19 +83,22 @@ type Entry struct {
 
 // Stats is a summary of registry state.
 type Stats struct {
-	Enabled         bool  `json:"enabled"`
-	Registered      int   `json:"registered"`
-	Online          int   `json:"online"`
-	Offline         int   `json:"offline"`
-	ValidationFails int64 `json:"validation_failures"`
-	RateLimited     int64 `json:"rate_limited"`
-	RejectedBySize  int64 `json:"rejected_by_size"`
+	Enabled          bool  `json:"enabled"`
+	Registered       int   `json:"registered"`
+	Online           int   `json:"online"`
+	Offline          int   `json:"offline"`
+	ValidationFails  int64 `json:"validation_failures"`
+	SignatureFails   int64 `json:"signature_failures"`
+	RateLimited      int64 `json:"rate_limited"`
+	RejectedBySize   int64 `json:"rejected_by_size"`
+	SecurityVerified int64 `json:"security_verified"`
 }
 
 // Registry indexes Agent Cards and tracks agent online status.
 type Registry struct {
 	hooks.BaseHook
-	cfg Config
+	cfg      Config
+	security *schema.SecurityVerifier
 
 	mu      sync.RWMutex
 	cards   map[string]*Entry
@@ -113,11 +118,12 @@ func New(cfg Config) *Registry {
 		cfg.BindingURL = DefaultBindingURL
 	}
 	return &Registry{
-		cfg:     cfg,
-		cards:   make(map[string]*Entry),
-		updates: make(map[string][]time.Time),
-		stats:   Stats{Enabled: cfg.Enabled},
-		now:     time.Now,
+		cfg:      cfg,
+		security: schema.NewSecurityVerifier(cfg.Security),
+		cards:    make(map[string]*Entry),
+		updates:  make(map[string][]time.Time),
+		stats:    Stats{Enabled: cfg.Enabled},
+		now:      time.Now,
 	}
 }
 
@@ -177,8 +183,29 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 		return allow, nil
 	}
 
-	card, err := schema.ValidateAndNormalize(c.Payload, r.cfg.Validate, r.cfg.BindingURL)
+	card, err := schema.Parse(c.Payload)
+	if err == nil {
+		err = schema.Validate(card, r.cfg.Validate)
+	}
+	if err == nil {
+		verified := len(card.Signatures) > 0
+		if err = r.security.Verify(ctx, c.Payload, card); err == nil && verified {
+			r.mu.Lock()
+			r.stats.SecurityVerified++
+			r.mu.Unlock()
+		}
+	}
+	if err == nil && r.cfg.Validate == schema.ModeLoose {
+		card = schema.Normalize(card, r.cfg.BindingURL)
+	}
 	if err != nil {
+		var secErr *schema.SecurityError
+		if stderrors.As(err, &secErr) {
+			r.mu.Lock()
+			r.stats.SignatureFails++
+			r.mu.Unlock()
+			log.Printf("[A2A] rejected unsigned or incorrectly signed card from %s: %v", address, err)
+		}
 		r.mu.Lock()
 		r.stats.ValidationFails++
 		r.mu.Unlock()
