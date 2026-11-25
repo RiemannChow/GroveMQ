@@ -21,12 +21,14 @@ package registry
 
 import (
 	"context"
+	stderrors "errors"
 	"log"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	a2ametrics "github.com/turtacn/grovemq/pkg/a2a"
 	"github.com/turtacn/grovemq/pkg/a2a/schema"
 	"github.com/turtacn/grovemq/pkg/hooks"
 )
@@ -52,6 +54,7 @@ type Config struct {
 	MaxCardSize   int
 	Registrations int // max card updates per agent per minute; 0 = unlimited
 	BindingURL    string
+	Security      *schema.SecurityConfig // nil disables signature verification
 }
 
 // DefaultConfig returns a disabled Registry with safe defaults.
@@ -80,19 +83,22 @@ type Entry struct {
 
 // Stats is a summary of registry state.
 type Stats struct {
-	Enabled         bool  `json:"enabled"`
-	Registered      int   `json:"registered"`
-	Online          int   `json:"online"`
-	Offline         int   `json:"offline"`
-	ValidationFails int64 `json:"validation_failures"`
-	RateLimited     int64 `json:"rate_limited"`
-	RejectedBySize  int64 `json:"rejected_by_size"`
+	Enabled          bool  `json:"enabled"`
+	Registered       int   `json:"registered"`
+	Online           int   `json:"online"`
+	Offline          int   `json:"offline"`
+	ValidationFails  int64 `json:"validation_failures"`
+	SignatureFails   int64 `json:"signature_failures"`
+	RateLimited      int64 `json:"rate_limited"`
+	RejectedBySize   int64 `json:"rejected_by_size"`
+	SecurityVerified int64 `json:"security_verified"`
 }
 
 // Registry indexes Agent Cards and tracks agent online status.
 type Registry struct {
 	hooks.BaseHook
-	cfg Config
+	cfg      Config
+	security *schema.SecurityVerifier
 
 	mu      sync.RWMutex
 	cards   map[string]*Entry
@@ -112,11 +118,12 @@ func New(cfg Config) *Registry {
 		cfg.BindingURL = DefaultBindingURL
 	}
 	return &Registry{
-		cfg:     cfg,
-		cards:   make(map[string]*Entry),
-		updates: make(map[string][]time.Time),
-		stats:   Stats{Enabled: cfg.Enabled},
-		now:     time.Now,
+		cfg:      cfg,
+		security: schema.NewSecurityVerifier(cfg.Security),
+		cards:    make(map[string]*Entry),
+		updates:  make(map[string][]time.Time),
+		stats:    Stats{Enabled: cfg.Enabled},
+		now:      time.Now,
 	}
 }
 
@@ -155,6 +162,7 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 		r.mu.Lock()
 		r.stats.RejectedBySize++
 		r.mu.Unlock()
+		a2ametrics.IncRegistration("rejected_size")
 		log.Printf("[A2A] rejected card from %s: payload %d bytes exceeds %d", address, len(c.Payload), r.cfg.MaxCardSize)
 		return &hooks.MessagePublishResult{Allow: false, Reason: "a2a: agent card exceeds max_card_size"}, nil
 	}
@@ -163,6 +171,7 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 		r.mu.Lock()
 		r.stats.RateLimited++
 		r.mu.Unlock()
+		a2ametrics.IncRegistration("rate_limited")
 		log.Printf("[A2A] rate-limited card update from %s", address)
 		return &hooks.MessagePublishResult{Allow: false, Reason: "a2a: card update rate limit exceeded"}, nil
 	}
@@ -170,14 +179,38 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 	// Empty payload clears the retained card and unregisters the agent.
 	if len(c.Payload) == 0 {
 		r.Delete(address)
+		a2ametrics.IncRegistration("unregistered")
 		return allow, nil
 	}
 
-	card, err := schema.ValidateAndNormalize(c.Payload, r.cfg.Validate, r.cfg.BindingURL)
+	card, err := schema.Parse(c.Payload)
+	if err == nil {
+		err = schema.Validate(card, r.cfg.Validate)
+	}
+	if err == nil {
+		verified := len(card.Signatures) > 0
+		if err = r.security.Verify(ctx, c.Payload, card); err == nil && verified {
+			r.mu.Lock()
+			r.stats.SecurityVerified++
+			r.mu.Unlock()
+		}
+	}
+	if err == nil && r.cfg.Validate == schema.ModeLoose {
+		card = schema.Normalize(card, r.cfg.BindingURL)
+	}
 	if err != nil {
+		var secErr *schema.SecurityError
+		if stderrors.As(err, &secErr) {
+			r.mu.Lock()
+			r.stats.SignatureFails++
+			r.mu.Unlock()
+			log.Printf("[A2A] rejected unsigned or incorrectly signed card from %s: %v", address, err)
+		}
 		r.mu.Lock()
 		r.stats.ValidationFails++
 		r.mu.Unlock()
+		a2ametrics.CardValidationFailures.Inc()
+		a2ametrics.IncRegistration("rejected_invalid")
 		log.Printf("[A2A] rejected card from %s: %v", address, err)
 		return &hooks.MessagePublishResult{Allow: false, Reason: "a2a: invalid agent card: " + err.Error()}, nil
 	}
@@ -205,6 +238,7 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 	r.cards[address] = entry
 	r.mu.Unlock()
 
+	a2ametrics.IncRegistration("registered")
 	log.Printf("[A2A] registered agent %s (%s)", address, card.Name)
 	return allow, nil
 }
@@ -237,9 +271,13 @@ func (r *Registry) setStatus(address, status, source string) {
 	if !ok {
 		return
 	}
+	if e.Status == status && e.StatusSource == source {
+		return
+	}
 	e.Status = status
 	e.StatusSource = source
 	e.UpdatedAt = r.now()
+	a2ametrics.IncStatusChange(status, source)
 }
 
 // allowUpdate implements a per-agent registration rate limit (sliding window).
@@ -314,6 +352,7 @@ func (r *Registry) Stats() Stats {
 		}
 	}
 	st.Registered = len(r.cards)
+	a2ametrics.SetRegistryAgents(st.Registered, st.Online, st.Offline)
 	return st
 }
 

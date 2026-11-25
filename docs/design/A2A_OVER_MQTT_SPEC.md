@@ -114,10 +114,11 @@ are accepted in compatibility mode and normalized by the Registry layer.
 
 ---
 
-## 6. Implementation status (P0 + P1)
+## 6. Implementation status (P0 + P1 + P2)
 
 This section tracks which parts of the contract are enforced by the current
-code. P1 adds the opt-in Registry and its discovery/registration closed loop.
+code. P1 adds the opt-in Registry; P2 adds task exchange and SDK-compatible
+JSON-RPC access.
 
 | Contract item | Status |
 |---|---|
@@ -126,17 +127,42 @@ code. P1 adds the opt-in Registry and its discovery/registration closed loop.
 | Discovery topic ↔ Client ID binding | Enforced |
 | Single shared engine instances across broker/dashboard | Enforced |
 | Agent Card schema validation | Implemented (strict + loose normalization, P1) |
+| Agent Card JWS verification with JKU allowlist | Implemented (P2, opt-in) |
 | Registry index, online-status tracking and rate limits | Implemented (P1) |
 | `a2a-status` annotation at delivery | Implemented (P1) |
 | Admin API, CLI and dashboard discovery views | Implemented (P1) |
-| Task state machine + artifact topics | Pending (P2) |
-| HTTP JSON-RPC gateway | Pending (P2) |
+| Task state machine + artifact/status topics | Implemented (P2) |
+| MQTT request/response correlation and PUBACK error mapping | Implemented (P2) |
+| HTTP JSON-RPC gateway | Implemented (P2, opt-in) |
+| A2A Prometheus metrics | Implemented (P2) |
 
 P1 is configured through `broker.a2a_registry` and is disabled by default.
 Enabling it registers the `a2a-registry` hook, attaches status annotations to
 retained discoveries, and exposes `/api/v5/a2a/agents` and `/api/v5/a2a/stats`.
-Configuration is startup-only; auth/ACL/hooks remain the only hot-reloaded
-sections.
+P2 adds `broker.a2a_gateway`, also disabled by default, which serves
+`POST /a2a/v1/{org}/{unit}/{agent}` on the dashboard port. Configuration is
+startup-only; auth/ACL/hooks remain the only hot-reloaded sections.
+
+### 6.1 P2 task exchange contract
+
+- Request topic: `$a2a/v1/{org}/{unit}/{agent}/requests` (QoS 1).
+- Responses use MQTT 5.0 Response Topic and Correlation Data, not a shared
+  response topic, so concurrent SDK calls are isolated.
+- Streaming events use
+  `$a2a/v1/{org}/{unit}/{agent}/tasks/{taskId}/status` and
+  `$a2a/v1/{org}/{unit}/{agent}/tasks/{taskId}/artifacts`. A terminal task
+  emits `final: true` and the subscription is closed.
+- JSON-RPC envelopes are JSON-RPC 2.0 with content type
+  `application/a2a+json`. SDK method aliases such as `sendMessage` and
+  `getTask` are normalized to canonical A2A 1.0 method names.
+- Semantic errors map to JSON-RPC codes and to MQTT PUBACK/PUBREC reason codes
+  with an `a2a-error` User Property. MQTT has no per-error reason code, so the
+  property is authoritative.
+- Signed Agent Cards use flattened JWS. The signature covers the canonical
+  card JSON with `signatures` removed; object keys are sorted and unknown
+  extension fields are preserved. `jku` must match a configured prefix, and
+  `kid`/`alg` select the JWKS key. Signature checks are off unless
+  `require_security_metadata` or `allowed_jku_prefixes` is configured.
 
 ---
 

@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/turtacn/grovemq/pkg/a2a/gateway"
 	"github.com/turtacn/grovemq/pkg/a2a/registry"
 	"github.com/turtacn/grovemq/pkg/a2a/schema"
 	"github.com/turtacn/grovemq/pkg/admin"
@@ -368,6 +369,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create dashboard server: %v", err)
 	}
+	configureA2AGateway(dashboardServer, cfg.Broker.A2AGateway, cfg.Broker.MQTTPort)
 
 	// --- Start MQTT Broker ---
 	go func() {
@@ -482,6 +484,10 @@ func configureA2ARegistry(b *broker.Broker, api *admin.APIServer, cfg config.A2A
 		MaxCardSize:   cfg.MaxCardSize,
 		Registrations: cfg.RegistrationRate,
 		BindingURL:    cfg.BindingURL,
+		Security: &schema.SecurityConfig{
+			RequireMetadata:    cfg.RequireSecurityMetadata,
+			AllowedJKUPrefixes: cfg.AllowedJKUPrefixes,
+		},
 	})
 	b.GetHooks().Register(r)
 	b.RetainedAnnotationFunc = r.AnnotateRetained
@@ -489,6 +495,49 @@ func configureA2ARegistry(b *broker.Broker, api *admin.APIServer, cfg config.A2A
 	log.Printf("[A2A] Registry enabled: validate=%s max_card_size=%d rate_limit=%d/min binding_url=%s",
 		mode, cfg.MaxCardSize, cfg.RegistrationRate, effectiveBindingURL(cfg.BindingURL))
 	return nil
+}
+
+// configureA2AGateway creates the optional HTTP JSON-RPC to MQTT bridge and
+// mounts it on the dashboard listener. It is disabled by default and reads a
+// snapshot of the configuration at startup; changing it requires a restart.
+// A failure to create an explicitly enabled gateway is fatal so operators do
+// not silently lose the advertised HTTP endpoint.
+func configureA2AGateway(dashboardServer *dashboard.Server, cfg config.A2AGatewayConfig, mqttPort string) {
+	if !cfg.Enabled {
+		log.Printf("[A2A] HTTP JSON-RPC gateway is disabled (start with broker.a2a_gateway.enabled=true)")
+		return
+	}
+	bridge, err := gateway.NewMQTTBridge(gateway.MQTTConfig{
+		BrokerURL: effectiveGatewayBrokerURL(cfg.MQTTBrokerURL, mqttPort),
+		ClientID:  "grovemq-gateway",
+		Username:  cfg.Username,
+		Password:  cfg.Password,
+		Timeout:   time.Duration(cfg.TimeoutSeconds) * time.Second,
+	})
+	if err != nil {
+		log.Fatalf("Failed to configure A2A gateway: %v", err)
+	}
+	dashboardServer.SetA2AGateway(gateway.NewHandler(bridge))
+	log.Printf("[A2A] HTTP JSON-RPC gateway enabled at %s{org}/{unit}/{agent} via %s",
+		gateway.PathPrefix, effectiveGatewayBrokerURL(cfg.MQTTBrokerURL, mqttPort))
+}
+
+// effectiveGatewayBrokerURL resolves an empty gateway URL to the local MQTT
+// listener. The bridge accepts both tcp://host:port and host:port forms.
+func effectiveGatewayBrokerURL(configured, mqttPort string) string {
+	if strings.TrimSpace(configured) != "" {
+		return configured
+	}
+	if strings.TrimSpace(mqttPort) == "" {
+		return "127.0.0.1:1883"
+	}
+	if strings.Contains(mqttPort, "://") {
+		return mqttPort
+	}
+	if strings.HasPrefix(mqttPort, ":") {
+		return "127.0.0.1" + mqttPort
+	}
+	return mqttPort
 }
 
 // effectiveBindingURL mirrors registry.New's default so startup logs show the

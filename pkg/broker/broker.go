@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -344,6 +345,9 @@ func New(nodeID string, clusterMgr *cluster.Manager) *Broker {
 	// Prevent a client from registering or unregistering another agent's card.
 	// This hook is inert for all non-A2A topics, so it is safe to always enable.
 	b.hooks.Register(hooks.NewA2AIdentityHook())
+	// Validate A2A JSON-RPC request envelopes so semantic errors can travel
+	// back in PUBACK/PUBREC reason codes and a2a-error user properties.
+	b.hooks.Register(hooks.NewA2ATaskHook())
 	b.hooks.Register(hooks.NewForwardHook(func(topic string, qos byte, payload []byte, retain bool) error {
 		// Raw routing: bypasses OnMessagePublish so forwarded messages do not
 		// re-enter the hook chain (prevents forwarding loops).
@@ -713,9 +717,10 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 	defer cancel()
 
 	var receivedDisconnectPacket bool // Track if we received a proper DISCONNECT packet
+	var tlsNegotiatedVersion byte = 4
 	for {
 		log.Printf("[DEBUG] About to read packet from TLS %s (clientID: %s)", conn.RemoteAddr(), clientID)
-		pk, err := readPacket(reader)
+		pk, err := readPacket(reader, tlsNegotiatedVersion)
 		if err != nil {
 			log.Printf("[DEBUG] Error reading packet from TLS %s (clientID: %s): %v", conn.RemoteAddr(), clientID, err)
 			if err != io.EOF {
@@ -728,6 +733,7 @@ func (b *Broker) handleTLSConnection(ctx context.Context, conn net.Conn) {
 
 		switch pk.FixedHeader.Type {
 		case packets.Connect:
+			tlsNegotiatedVersion = pk.ProtocolVersion
 			clientID = pk.Connect.ClientIdentifier
 			cleanSession := pk.Connect.Clean
 			keepAlive := time.Duration(pk.Connect.Keepalive) * time.Second
@@ -1057,7 +1063,7 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 
 		log.Printf("[DEBUG] About to read packet from %s (clientID: %s)", conn.RemoteAddr(), clientID)
-		pk, err := readPacket(reader)
+		pk, err := readPacket(reader, negotiatedVersion)
 		if err != nil {
 			log.Printf("[DEBUG] Error reading packet from %s (clientID: %s): %v", conn.RemoteAddr(), clientID, err)
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -1911,11 +1917,20 @@ func (b *Broker) handleConnection(ctx context.Context, conn net.Conn) {
 					} else {
 						respType = packets.Pubrec
 					}
+					reasonCode := byte(0x87) // Not authorized
+					var ackProps packets.Properties
+					if res != nil {
+						if res.ReasonCode != nil {
+							reasonCode = *res.ReasonCode
+						}
+						ackProps = publishAckProperties(res.UserProperties)
+					}
 					resp := packets.Packet{
 						FixedHeader:     packets.FixedHeader{Type: respType},
 						PacketID:        pk.PacketID,
 						ProtocolVersion: pk.ProtocolVersion,
-						ReasonCode:      0x87, // Not authorized
+						ReasonCode:      reasonCode,
+						Properties:      ackProps,
 					}
 					writePacket(conn, &resp)
 				}
@@ -2455,6 +2470,24 @@ func (b *Broker) processPublishPostAck(clientID, resolvedTopic string, payload [
 	}
 }
 
+// publishAckProperties converts hook-provided user properties into MQTT v5
+// PUBACK/PUBREC properties. Keys are sorted for deterministic wire output.
+func publishAckProperties(props map[string][]byte) packets.Properties {
+	if len(props) == 0 {
+		return packets.Properties{}
+	}
+	keys := make([]string, 0, len(props))
+	for k := range props {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	user := make([]packets.UserProperty, 0, len(keys))
+	for _, k := range keys {
+		user = append(user, packets.UserProperty{Key: k, Val: string(props[k])})
+	}
+	return packets.Properties{User: user}
+}
+
 func copyUserProperties(props map[string][]byte) map[string][]byte {
 	if len(props) == 0 {
 		return nil
@@ -2875,7 +2908,7 @@ func (b *Broker) SetBalanceConfig(policy, strategy string) {
 }
 
 // readPacket reads a full MQTT packet from a connection.
-func readPacket(r *bufio.Reader) (*packets.Packet, error) {
+func readPacket(r *bufio.Reader, negotiatedVersion byte) (*packets.Packet, error) {
 	fh := new(packets.FixedHeader)
 	b, err := r.ReadByte()
 	if err != nil {
@@ -2908,7 +2941,7 @@ func readPacket(r *bufio.Reader) (*packets.Packet, error) {
 		}
 	}
 
-	pk := &packets.Packet{FixedHeader: *fh}
+	pk := &packets.Packet{FixedHeader: *fh, ProtocolVersion: negotiatedVersion}
 	switch pk.FixedHeader.Type {
 	case packets.Connect:
 		err = pk.ConnectDecode(buf)

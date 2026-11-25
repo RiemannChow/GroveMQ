@@ -146,7 +146,14 @@ func TestA2ARegistryDiscoveryLoop(t *testing.T) {
 	entry, ok := reg.Get(address)
 	require.True(t, ok)
 	assert.Equal(t, "Ops Agent", entry.Card.Name)
-	assert.Equal(t, registry.StatusOffline, entry.Status)
+
+	// The connected hook may run before or after the first retained publish,
+	// so drive the status transition explicitly instead of assuming a race.
+	agent.Disconnect(250)
+	require.Eventually(t, func() bool {
+		e, found := reg.Get(address)
+		return found && e.Status == registry.StatusOffline
+	}, 2*time.Second, 25*time.Millisecond)
 
 	data := adminA2AData(t, api, "/api/v5/a2a/agents")
 	var agents []admin.A2AAgent
@@ -155,7 +162,6 @@ func TestA2ARegistryDiscoveryLoop(t *testing.T) {
 	assert.Equal(t, address, agents[0].Address)
 
 	// Reconnect the agent so the connected hook marks the existing card online.
-	agent.Disconnect(250)
 	agent = connectA2AClient(t, brokerURL, address, nil)
 	require.Eventually(t, func() bool {
 		e, found := reg.Get(address)
