@@ -273,6 +273,7 @@ func readPacket(r *bufio.Reader) (*packets.Packet, error) {
 	if err != nil {
 		return nil, err
 	}
+	fh.Remaining = remaining
 	body := make([]byte, remaining)
 	if _, err := io.ReadFull(r, body); err != nil {
 		return nil, err

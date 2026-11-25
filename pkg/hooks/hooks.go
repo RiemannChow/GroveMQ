@@ -402,7 +402,12 @@ func (m *Manager) OnMessagePublish(ctx context.Context, c *MessagePublishCtx) (*
 			if reason == "" {
 				reason = "rejected by hook " + h.Name()
 			}
-			return &MessagePublishResult{Allow: false, Reason: reason}, nil
+			return &MessagePublishResult{
+				Allow:          false,
+				Reason:         reason,
+				ReasonCode:     res.ReasonCode,
+				UserProperties: res.UserProperties,
+			}, nil
 		}
 	}
 	return &MessagePublishResult{Allow: true}, nil
