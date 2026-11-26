@@ -263,3 +263,39 @@ func TestRegistryRequiresSignedCardWhenConfigured(t *testing.T) {
 	assert.Equal(t, int64(1), r.Stats().SignatureFails)
 	assert.Equal(t, int64(1), r.Stats().ValidationFails)
 }
+
+func TestRegistryRestoreCardWarmsUpIndex(t *testing.T) {
+	cfg := *DefaultConfig()
+	cfg.Enabled = true
+	cfg.Validate = schema.ModeLoose
+	r := New(cfg)
+	addr := "org/unit/restored"
+
+	// Invalid and empty retained payloads are ignored.
+	assert.False(t, r.RestoreCard(addr, nil))
+	assert.False(t, r.RestoreCard(addr, []byte(`broken`)))
+	assert.False(t, r.RestoreCard("bad-address", []byte(validCard)))
+
+	require.True(t, r.RestoreCard(addr, []byte(validCard)))
+	e, ok := r.Get(addr)
+	require.True(t, ok)
+	assert.Equal(t, StatusOffline, e.Status)
+	assert.Equal(t, StatusSourceBroker, e.StatusSource)
+	assert.Equal(t, "Ops Agent", e.Card.Name)
+	assert.NotEmpty(t, e.Card.SupportedInterfaces) // loose mode normalized
+
+	// A connected agent restored from retained state is online immediately.
+	addr2 := "org/unit/connected"
+	r.OnClientConnected(context.Background(), &hooks.ClientCtx{ClientID: addr2})
+	require.True(t, r.RestoreCard(addr2, []byte(validCard)))
+	e2, ok := r.Get(addr2)
+	require.True(t, ok)
+	assert.Equal(t, StatusOnline, e2.Status)
+
+	// Re-restoring keeps the original registration timestamp.
+	before, _ := r.Get(addr)
+	time.Sleep(time.Millisecond)
+	require.True(t, r.RestoreCard(addr, []byte(validCard)))
+	after, _ := r.Get(addr)
+	assert.Equal(t, before.RegisteredAt, after.RegisteredAt)
+}

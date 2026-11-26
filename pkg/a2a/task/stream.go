@@ -258,6 +258,22 @@ func (h *StreamHub) PublishArtifact(address, taskID string, artifact *Artifact) 
 	return nil
 }
 
+// Address returns the agent address this stream is subscribed to.
+func (s *Stream) Address() string {
+	if s == nil {
+		return ""
+	}
+	return s.address
+}
+
+// TaskID returns the task ID this stream is subscribed to.
+func (s *Stream) TaskID() string {
+	if s == nil {
+		return ""
+	}
+	return s.taskID
+}
+
 // Events returns the event channel. The channel is never closed; select on
 // Done to observe terminal closure.
 func (s *Stream) Events() <-chan StreamEvent {

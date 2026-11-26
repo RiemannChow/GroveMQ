@@ -152,6 +152,9 @@ JSON-RPC access.
 | Definition-of-Done contract tests | `tests/contract/a2a_dod_test.go`, `a2a_p1_test.go`, `a2a_p2_test.go` |
 | Task request identity binding | Opt-in (`broker.a2a_request_auth.policy`); `hooks.A2ARequestAuthHook`, PUBACK `UnauthorizedError` (0x02) |
 | HTTP gateway bearer authentication | Opt-in (`broker.a2a_gateway.tokens`); principal promoted to MQTT CONNECT user for policy binding |
+| Streaming over MQTT status/artifacts topics | Implemented (`gateway.MQTTStreamBridge` subscribes before request, relays QoS 1 events into `task.StreamHub`) |
+| HTTP `message/stream` SSE | Implemented (`gateway.NewStreamHandler` emits `text/event-stream`, closes on final event) |
+| Registry warm-up from retained cards | Implemented (`Registry.RestoreCard`, broker `GetRetainedMessages`, startup warm-up) |
 
 P1 is configured through `broker.a2a_registry` and is disabled by default.
 Enabling it registers the `a2a-registry` hook, attaches status annotations to

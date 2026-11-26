@@ -342,6 +342,9 @@ func main() {
 		log.Fatalf("Failed to configure A2A Registry: %v", err)
 	}
 	configureA2ARequestAuth(b, cfg.Broker.A2ARequestAuth)
+	if a2aRegistry != nil {
+		warmUpA2ARegistry(context.Background(), b, a2aRegistry)
+	}
 
 	// Dashboard Server
 	dashboardConfig := dashboard.DefaultConfig()
@@ -554,7 +557,18 @@ func configureA2AGateway(dashboardServer *dashboard.Server, cfg config.A2AGatewa
 		}
 	}
 	auth := &gateway.AuthConfig{Tokens: cfg.Tokens}
-	var handler http.Handler = gateway.NewHandlerWithAuth(bridge, lookup, auth)
+	streamBridge, err := gateway.NewMQTTStreamBridge(gateway.MQTTConfig{
+		BrokerURL: effectiveGatewayBrokerURL(cfg.MQTTBrokerURL, mqttPort),
+		ClientID:  "grovemq-gateway-stream",
+		Username:  cfg.Username,
+		Password:  cfg.Password,
+		Timeout:   time.Duration(cfg.TimeoutSeconds) * time.Second,
+	}, "main")
+	if err != nil {
+		log.Fatalf("Failed to configure A2A streaming gateway: %v", err)
+	}
+	_ = streamBridge.Hub().StartJanitor(time.Minute)
+	var handler http.Handler = gateway.NewStreamHandler(bridge, streamBridge, lookup, auth)
 	if len(cfg.Tokens) == 0 {
 		log.Printf("[A2A] WARNING: HTTP JSON-RPC gateway has no bearer tokens configured; " +
 			"all callers are anonymous. Set broker.a2a_gateway.tokens or restrict network access.")
@@ -564,6 +578,26 @@ func configureA2AGateway(dashboardServer *dashboard.Server, cfg config.A2AGatewa
 	dashboardServer.SetA2AGateway(handler)
 	log.Printf("[A2A] HTTP JSON-RPC gateway enabled at %s{org}/{unit}/{agent} via %s",
 		gateway.PathPrefix, effectiveGatewayBrokerURL(cfg.MQTTBrokerURL, mqttPort))
+}
+
+// warmUpA2ARegistry rebuilds the Registry index from durable retained Agent
+// Cards so admin/CLI discovery works immediately after a broker restart,
+// before agents republish. Failures are logged but never fatal: live publishes
+// will continue to populate the index through the hook.
+func warmUpA2ARegistry(ctx context.Context, b *broker.Broker, reg *registry.Registry) {
+	msgs, err := b.GetRetainedMessages(ctx, hooks.A2ADiscoveryPrefix+"#")
+	if err != nil {
+		log.Printf("[A2A] WARNING: failed to load retained cards for registry warm-up: %v", err)
+		return
+	}
+	restored := 0
+	for _, msg := range msgs {
+		address := strings.TrimPrefix(msg.Topic, hooks.A2ADiscoveryPrefix)
+		if reg.RestoreCard(address, msg.Payload) {
+			restored++
+		}
+	}
+	log.Printf("[A2A] registry warm-up restored %d agent card(s) from retained messages", restored)
 }
 
 // configureA2ARequestAuth installs the broker-side identity policy for A2A task

@@ -343,6 +343,56 @@ func (r *Registry) allowUpdate(address string) bool {
 	return true
 }
 
+// RestoreCard reindexes one retained Agent Card without going through the
+// publish hook. It is used at startup to rebuild the in-memory index from
+// durable retained messages. A client that is already connected when the card
+// is restored is marked online; otherwise the card starts offline/broker.
+// Invalid cards and empty payloads are skipped.
+func (r *Registry) RestoreCard(address string, payload []byte) bool {
+	if r == nil || !r.cfg.Enabled || len(payload) == 0 || !hooks.ValidA2AAgentAddress(address) {
+		return false
+	}
+	card, err := schema.Parse(payload)
+	if err == nil {
+		err = schema.Validate(card, r.cfg.Validate)
+	}
+	if err == nil && r.cfg.Validate == schema.ModeLoose {
+		card = schema.Normalize(card, r.cfg.BindingURL)
+	}
+	if err != nil {
+		log.Printf("[A2A] skipping invalid retained card for %s during warm-up: %v", address, err)
+		return false
+	}
+
+	parts := strings.Split(address, "/")
+	status, source := StatusOffline, StatusSourceBroker
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.connected[address] {
+		status, source = StatusOnline, StatusSourceBroker
+	}
+	_, exists := r.cards[address]
+	entry := &Entry{
+		Address:      address,
+		OrgID:        parts[0],
+		UnitID:       parts[1],
+		AgentID:      parts[2],
+		Card:         card,
+		Status:       status,
+		StatusSource: source,
+		RegisteredAt: r.now(),
+		UpdatedAt:    r.now(),
+	}
+	if prev := r.cards[address]; prev != nil {
+		entry.RegisteredAt = prev.RegisteredAt
+	}
+	r.cards[address] = entry
+	if !exists {
+		a2ametrics.IncRegistration("restored")
+	}
+	return true
+}
+
 // Get returns a copy of one registry entry.
 func (r *Registry) Get(address string) (*Entry, bool) {
 	r.mu.RLock()

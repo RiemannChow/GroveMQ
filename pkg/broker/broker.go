@@ -401,6 +401,16 @@ func (b *Broker) GetACLEngine() *acl.Engine {
 	return b.aclEngine
 }
 
+// GetRetainedMessages returns a snapshot of retained messages matching filter.
+// It is read-only and used by startup components such as the A2A Registry to
+// rebuild state from durable retained data.
+func (b *Broker) GetRetainedMessages(ctx context.Context, filter string) ([]retainer.RetainedMessage, error) {
+	if b == nil || b.retainer == nil {
+		return nil, fmt.Errorf("broker: retainer is not available")
+	}
+	return b.retainer.GetRetainedMessages(ctx, filter)
+}
+
 // GetHooks returns the hooks manager for registering/inspecting extension-point
 // hooks. Intentionally NOT part of admin.BrokerInterface so the admin/dashboard
 // mocks need no changes; tests call it directly on the real broker.
