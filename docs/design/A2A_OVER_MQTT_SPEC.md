@@ -155,6 +155,10 @@ JSON-RPC access.
 | Streaming over MQTT status/artifacts topics | Implemented (`gateway.MQTTStreamBridge` subscribes before request, relays QoS 1 events into `task.StreamHub`) |
 | HTTP `message/stream` SSE | Implemented (`gateway.NewStreamHandler` emits `text/event-stream`, closes on final event) |
 | Registry warm-up from retained cards | Implemented (`Registry.RestoreCard`, broker `GetRetainedMessages`, startup warm-up) |
+| Push Notification Config (4 methods) | Implemented (`task.PushStore` + `gateway.CompatibilityContext`, answered locally for API parity) |
+| Get Extended Agent Card | Implemented (`Registry.ExtendedCard` from `x-extended-card`; capability-gated, auth required when tokens are set) |
+| Task/Artifact persistence | Implemented (`task.Store` over the shared durable key-value store; mirror on success, offline `tasks/get` fallback) |
+| Shared-subscription work pools | Implemented (`task.SharedRequestTopic` filter helper; broker `$share` round-robin verified end-to-end) |
 
 P1 is configured through `broker.a2a_registry` and is disabled by default.
 Enabling it registers the `a2a-registry` hook, attaches status annotations to
@@ -192,6 +196,31 @@ startup-only; auth/ACL/hooks remain the only hot-reloaded sections.
 - In-process `StreamHub` instances expire terminal-task tombstones after
   `DefaultClosedTTL` (10 minutes) via `StartJanitor`; a late subscriber that
   supplies the current task still receives a final event.
+
+### 6.2 A2A 1.0 optional methods
+
+- `CreateTaskPushNotificationConfig`, `GetTaskPushNotificationConfig`,
+  `ListTaskPushNotificationConfigs` and `DeleteTaskPushNotificationConfig` are
+  answered by the gateway locally. Because MQTT subscriptions already deliver
+  task updates natively, no HTTP webhook is invoked; the configs are stored in
+  `task.PushStore` purely for SDK API parity. A request to an agent whose Card
+  does not advertise `capabilities.pushNotifications` receives
+  `PushNotificationNotSupportedError` (-32003).
+- `GetExtendedAgentCard` is served from the `x-extended-card` extension of the
+  signed Agent Card in the Registry. It requires the agent to advertise
+  `capabilities.extendedAgentCard` and, when gateway bearer tokens are
+  configured, an authenticated principal. A missing extension returns
+  `ExtendedAgentCardNotConfiguredError` (-32007).
+- Successful Task results are mirrored into `task.Store`, a prefix-scoped layer
+  over the broker's shared key-value backend (`a2a/task/{address}/{taskId}`).
+  Artifacts are persisted with the Task. While an agent is offline, `tasks/get`
+  is answered from this store, so task state survives an agent restart. With
+  `GROVEMQ_DATA_DIR` set the records are durable across broker restarts; without
+  it the store is in-memory and behaves as a no-op-safe cache.
+- Agent workers scale out by sharing the filter
+  `$share/{pool_id}/$a2a/v1/{org}/{unit}/{agent}/requests`. Each request is
+  delivered to exactly one pool member (broker round-robin), which preserves
+  the A2A guarantee that one task is owned by one worker at a time.
 
 ---
 
