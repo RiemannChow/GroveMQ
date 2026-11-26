@@ -243,48 +243,54 @@ func p2WritePacketSafe(conn net.Conn, encode func(*bytes.Buffer) error) error {
 }
 
 func TestA2AHTTPJSONRPCToMQTTTaskExchange(t *testing.T) {
-	port := freePort(t)
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	b := broker.New("a2a-p2-contract", nil)
-	go func() { _ = b.StartServer(ctx, addr) }()
-	waitForTCP(t, addr)
+	// The canonical A2A 1.0 method name and the common SDK alias must both
+	// reach the MQTT agent and return the same completed Task with Artifacts.
+	for _, method := range []string{task.MethodMessageSend, "sendMessage"} {
+		t.Run(method, func(t *testing.T) {
+			port := freePort(t)
+			addr := fmt.Sprintf("127.0.0.1:%d", port)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			b := broker.New("a2a-p2-contract", nil)
+			go func() { _ = b.StartServer(ctx, addr) }()
+			waitForTCP(t, addr)
 
-	ready := make(chan struct{})
-	p2StartResponder(t, addr, "org/unit/agent", ready)
-	select {
-	case <-ready:
-	case <-time.After(3 * time.Second):
-		t.Fatal("raw A2A agent did not subscribe")
+			ready := make(chan struct{})
+			p2StartResponder(t, addr, "org/unit/agent", ready)
+			select {
+			case <-ready:
+			case <-time.After(3 * time.Second):
+				t.Fatal("raw A2A agent did not subscribe")
+			}
+
+			bridge, err := gateway.NewMQTTBridge(gateway.MQTTConfig{BrokerURL: "tcp://" + addr, Timeout: 3 * time.Second})
+			require.NoError(t, err)
+			server := httptest.NewServer(gateway.NewHandler(bridge))
+			defer server.Close()
+
+			body := `{"jsonrpc":"2.0","id":"sdk-1","method":"` + method + `","params":{"message":{"messageId":"m-1","role":"ROLE_USER","parts":[{"text":"hello"}]}}}`
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+gateway.PathPrefix+"org/unit/agent", bytes.NewBufferString(body))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", task.ContentType)
+			req.Header.Set("A2A-Version", "1.0")
+			req.Header.Set("A2A-Extensions", "https://example.com/a2a/ext")
+			resp, err := server.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			var rpc task.Response
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&rpc))
+			require.Nil(t, rpc.Error)
+			assert.JSONEq(t, `"sdk-1"`, string(rpc.ID))
+
+			var result task.Task
+			require.NoError(t, rpc.ResultInto(&result))
+			assert.Equal(t, "p2-task-1", result.ID)
+			assert.Equal(t, task.TaskStateCompleted, result.Status.State)
+			require.Len(t, result.Artifacts, 1)
+			assert.Equal(t, "p2 answer", result.Artifacts[0].Parts[0].Text)
+		})
 	}
-
-	bridge, err := gateway.NewMQTTBridge(gateway.MQTTConfig{BrokerURL: "tcp://" + addr, Timeout: 3 * time.Second})
-	require.NoError(t, err)
-	server := httptest.NewServer(gateway.NewHandler(bridge))
-	defer server.Close()
-
-	body := `{"jsonrpc":"2.0","id":"sdk-1","method":"sendMessage","params":{"message":{"messageId":"m-1","role":"ROLE_USER","parts":[{"text":"hello"}]}}}`
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+gateway.PathPrefix+"org/unit/agent", bytes.NewBufferString(body))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", task.ContentType)
-	req.Header.Set("A2A-Version", "1.0")
-	req.Header.Set("A2A-Extensions", "https://example.com/a2a/ext")
-	resp, err := server.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var rpc task.Response
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&rpc))
-	require.Nil(t, rpc.Error)
-	assert.JSONEq(t, `"sdk-1"`, string(rpc.ID))
-
-	var result task.Task
-	require.NoError(t, rpc.ResultInto(&result))
-	assert.Equal(t, "p2-task-1", result.ID)
-	assert.Equal(t, task.TaskStateCompleted, result.Status.State)
-	require.Len(t, result.Artifacts, 1)
-	assert.Equal(t, "p2 answer", result.Artifacts[0].Parts[0].Text)
 }
 
 func TestA2APUBACKCarriesSemanticError(t *testing.T) {

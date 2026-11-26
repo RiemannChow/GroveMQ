@@ -94,6 +94,14 @@ func (b *MQTTBridge) Request(ctx context.Context, address string, req *task.Requ
 	responseTopic := fmt.Sprintf("$a2a/v1/gateway/%s/responses/%s", b.gatewayID, requestID)
 	requestTopic := fmt.Sprintf("$a2a/v1/%s/requests", address)
 
+	// The authenticated HTTP principal is promoted to the MQTT connection user
+	// so the broker's identity policy sees a real, authenticated MQTT identity
+	// rather than a user property a client could forge on the wire.
+	connectUsername := b.cfg.Username
+	if principal := strings.TrimSpace(string(props[PropertyPrincipal])); principal != "" {
+		connectUsername = principal
+	}
+
 	conn, err := dialContext(ctx, b.cfg)
 	if err != nil {
 		return nil, err
@@ -115,8 +123,8 @@ func (b *MQTTBridge) Request(ctx context.Context, address string, req *task.Requ
 				ClientIdentifier: b.cfg.ClientID + "-" + requestID[:8],
 				Clean:            true,
 				Keepalive:        30,
-				UsernameFlag:     b.cfg.Username != "",
-				Username:         []byte(b.cfg.Username),
+				UsernameFlag:     connectUsername != "",
+				Username:         []byte(connectUsername),
 				PasswordFlag:     b.cfg.Password != "",
 				Password:         []byte(b.cfg.Password),
 			},
@@ -165,6 +173,9 @@ func (b *MQTTBridge) Request(ctx context.Context, address string, req *task.Requ
 		if key == "Content-Type" {
 			contentType = string(value)
 			continue
+		}
+		if key == PropertyPrincipal {
+			continue // carried as the MQTT user name instead
 		}
 		userProps = append(userProps, packets.UserProperty{Key: key, Val: string(value)})
 	}

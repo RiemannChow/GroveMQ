@@ -40,6 +40,7 @@ const (
 	DefaultBindingURL         = "mqtt://localhost:1883"
 	StatusOnline              = "online"
 	StatusOffline             = "offline"
+	StatusLWT                 = "lwt"
 	StatusSourceBroker        = "broker"
 	StatusSourceAgent         = "agent"
 	StatusSourceLWT           = "lwt"
@@ -100,10 +101,11 @@ type Registry struct {
 	cfg      Config
 	security *schema.SecurityVerifier
 
-	mu      sync.RWMutex
-	cards   map[string]*Entry
-	updates map[string][]time.Time
-	stats   Stats
+	mu        sync.RWMutex
+	cards     map[string]*Entry
+	connected map[string]bool
+	updates   map[string][]time.Time
+	stats     Stats
 
 	// now is overridden in tests for deterministic rate-limit checks.
 	now func() time.Time
@@ -118,12 +120,13 @@ func New(cfg Config) *Registry {
 		cfg.BindingURL = DefaultBindingURL
 	}
 	return &Registry{
-		cfg:      cfg,
-		security: schema.NewSecurityVerifier(cfg.Security),
-		cards:    make(map[string]*Entry),
-		updates:  make(map[string][]time.Time),
-		stats:    Stats{Enabled: cfg.Enabled},
-		now:      time.Now,
+		cfg:       cfg,
+		security:  schema.NewSecurityVerifier(cfg.Security),
+		cards:     make(map[string]*Entry),
+		connected: make(map[string]bool),
+		updates:   make(map[string][]time.Time),
+		stats:     Stats{Enabled: cfg.Enabled},
+		now:       time.Now,
 	}
 }
 
@@ -148,7 +151,7 @@ func (r *Registry) Points() []string {
 // Non-discovery topics are ignored.
 func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublishCtx) (*hooks.MessagePublishResult, error) {
 	allow := &hooks.MessagePublishResult{Allow: true}
-	if c == nil || !strings.HasPrefix(c.Topic, hooks.A2ADiscoveryPrefix) {
+	if c == nil || !r.cfg.Enabled || !strings.HasPrefix(c.Topic, hooks.A2ADiscoveryPrefix) {
 		return allow, nil
 	}
 
@@ -219,14 +222,21 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 	now := r.now()
 	r.mu.Lock()
 	prev := r.cards[address]
+	// A client may connect before it publishes its card. In that case the
+	// connection event has no entry to update, so derive the initial state from
+	// the live connection set to keep a fresh card online at discovery time.
+	status, source := StatusOffline, StatusSourceBroker
+	if r.connected[address] {
+		status, source = StatusOnline, StatusSourceBroker
+	}
 	entry := &Entry{
 		Address:      address,
 		OrgID:        parts[0],
 		UnitID:       parts[1],
 		AgentID:      parts[2],
 		Card:         card,
-		Status:       StatusOffline,
-		StatusSource: StatusSourceBroker,
+		Status:       status,
+		StatusSource: source,
 		RegisteredAt: now,
 		UpdatedAt:    now,
 	}
@@ -243,25 +253,57 @@ func (r *Registry) OnMessagePublish(ctx context.Context, c *hooks.MessagePublish
 	return allow, nil
 }
 
-// OnClientConnected marks a registered agent online.
+// OnClientConnected marks a registered agent online. The connection set is
+// updated first so a card published later starts in the online state.
 func (r *Registry) OnClientConnected(_ context.Context, c *hooks.ClientCtx) {
-	if c == nil {
+	if c == nil || !r.cfg.Enabled {
 		return
 	}
+	r.mu.Lock()
+	r.connected[c.ClientID] = true
+	r.mu.Unlock()
 	r.setStatus(c.ClientID, StatusOnline, StatusSourceBroker)
 }
 
-// OnClientDisconnected marks a registered agent offline. A clean DISCONNECT
-// is attributed to the agent; an abrupt close is attributed to LWT.
+// OnClientDisconnected records the final state of an agent. A clean DISCONNECT
+// is attributed to the agent, a broker-side termination to the broker, and an
+// abrupt close to LWT.
 func (r *Registry) OnClientDisconnected(_ context.Context, c *hooks.ClientCtx) {
-	if c == nil {
+	if c == nil || !r.cfg.Enabled {
 		return
 	}
-	source := StatusSourceLWT
-	if strings.Contains(strings.ToLower(c.Reason), "disconnect") {
-		source = StatusSourceAgent
+	status, source := classifyDisconnect(c.Reason)
+	r.mu.Lock()
+	delete(r.connected, c.ClientID)
+	r.mu.Unlock()
+	r.setStatus(c.ClientID, status, source)
+}
+
+// classifyDisconnect maps the broker's disconnect reason to the status and
+// origin advertised with retained cards. Only an explicit client DISCONNECT is
+// an agent-originated offline event; admin/kick actions are broker decisions.
+func classifyDisconnect(reason string) (status, source string) {
+	lower := strings.ToLower(reason)
+	switch {
+	case strings.Contains(lower, "client sent disconnect"):
+		return StatusOffline, StatusSourceAgent
+	case strings.Contains(lower, "disconnected by admin"),
+		strings.Contains(lower, "kicked out"),
+		strings.HasPrefix(lower, "broker "):
+		return StatusOffline, StatusSourceBroker
+	default:
+		return StatusLWT, StatusSourceLWT
 	}
-	r.setStatus(c.ClientID, StatusOffline, source)
+}
+
+// SetStatus applies a broker-originated status decision, for example from a
+// health check. It is a no-op when the Registry is disabled or the address is
+// not registered.
+func (r *Registry) SetStatus(address, status, source string) {
+	if !r.cfg.Enabled {
+		return
+	}
+	r.setStatus(address, status, source)
 }
 
 func (r *Registry) setStatus(address, status, source string) {
@@ -316,6 +358,9 @@ func (r *Registry) Get(address string) (*Entry, bool) {
 
 // Delete unregisters an agent from the index.
 func (r *Registry) Delete(address string) bool {
+	if !r.cfg.Enabled {
+		return false
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.cards[address]; !ok {
@@ -359,7 +404,7 @@ func (r *Registry) Stats() Stats {
 // AnnotateRetained adds a2a-status user properties to a retained card at
 // delivery time. It is safe to call with nil properties and for non-A2A topics.
 func (r *Registry) AnnotateRetained(topic string, props map[string][]byte) map[string][]byte {
-	if !strings.HasPrefix(topic, hooks.A2ADiscoveryPrefix) {
+	if !r.cfg.Enabled || !strings.HasPrefix(topic, hooks.A2ADiscoveryPrefix) {
 		return props
 	}
 	address := strings.TrimPrefix(topic, hooks.A2ADiscoveryPrefix)

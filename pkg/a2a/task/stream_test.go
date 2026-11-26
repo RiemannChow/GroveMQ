@@ -112,3 +112,47 @@ func TestStreamHubRejectsInvalidAddress(t *testing.T) {
 	_, err := hub.Subscribe("bad", "task-1", nil)
 	assert.Error(t, err)
 }
+
+func TestStreamHubSweepClosedTombstones(t *testing.T) {
+	hub := NewStreamHub(4)
+	address := "org/unit/agent"
+	task := NewTask("task-sweep", "ctx-1")
+	require.NoError(t, task.Transition(TaskStateWorking))
+	require.NoError(t, task.Transition(TaskStateCompleted))
+	require.NoError(t, hub.PublishStatus(address, task))
+
+	_, terminal := hub.Stats()
+	assert.Equal(t, 1, terminal)
+
+	assert.Equal(t, 0, hub.SweepClosed(time.Hour))
+	assert.Equal(t, 1, hub.SweepClosed(0))
+	_, terminal = hub.Stats()
+	assert.Equal(t, 0, terminal)
+
+	// A late subscriber still sees a final event when the current task is
+	// supplied, even after the tombstone has expired.
+	late, err := hub.Subscribe(address, task.ID, task)
+	require.NoError(t, err)
+	select {
+	case ev := <-late.Events():
+		assert.True(t, ev.Final)
+	case <-time.After(time.Second):
+		t.Fatal("missing final event after tombstone sweep")
+	}
+}
+
+func TestStreamHubJanitorPeriodicallySweeps(t *testing.T) {
+	hub := NewStreamHub(4)
+	stop := hub.StartJanitorWithTTL(2*time.Millisecond, time.Millisecond)
+	defer stop()
+
+	task := NewTask("task-janitor", "ctx-1")
+	require.NoError(t, task.Transition(TaskStateWorking))
+	require.NoError(t, task.Transition(TaskStateFailed))
+	require.NoError(t, hub.PublishStatus("org/unit/agent", task))
+
+	require.Eventually(t, func() bool {
+		_, terminal := hub.Stats()
+		return terminal == 0
+	}, time.Second, 5*time.Millisecond)
+}

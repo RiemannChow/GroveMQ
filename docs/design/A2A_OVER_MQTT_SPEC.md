@@ -81,6 +81,12 @@ User Properties set on a retained PUBLISH are stored with the retained message
 and re-delivered to later subscribers. This is required so status metadata can
 be attached to cards at delivery time.
 
+Status semantics: an explicit client DISCONNECT produces `a2a-status=offline`
+with `a2a-status-source=agent`; an abrupt close produces `lwt`/`lwt`; a
+broker-side disconnect (admin kick) or a broker health-check decision produces
+`offline`/`broker`. A card published by an already connected client starts in
+`online`/`broker`, so new subscribers observe the live state immediately.
+
 ---
 
 ## 4. Agent Card payload
@@ -135,6 +141,17 @@ JSON-RPC access.
 | MQTT request/response correlation and PUBACK error mapping | Implemented (P2) |
 | HTTP JSON-RPC gateway | Implemented (P2, opt-in) |
 | A2A Prometheus metrics | Implemented (P2) |
+| Unknown Agent Card fields preserved on round-trip | Enforced (`schema.AgentCard.Extra`) |
+| Terminal stream tombstones reclaimed by TTL sweep | Enforced (`task.StreamHub.StartJanitor` / `SweepClosed`) |
+| Task results rejected from Messages and forced into Artifacts | Enforced (`task.ValidateTaskResult` / gateway result check) |
+| Multi-level broker mountpoint warning at startup | Implemented (`cmd/grovemq` A2A Registry startup check) |
+| Online status for cards published after CONNECT | Enforced (`registry` live connection set seeds initial card state) |
+| LWT status and broker-originated status decisions | Enforced (`classifyDisconnect`, `Registry.SetStatus`) |
+| Unregistered agent task returns `TaskNotFoundError` | Implemented when the Registry is enabled (`gateway.AgentLookup`) |
+| Disabled Registry is a no-op on all hook points | Enforced (`registry.Config.Enabled` guards) |
+| Definition-of-Done contract tests | `tests/contract/a2a_dod_test.go`, `a2a_p1_test.go`, `a2a_p2_test.go` |
+| Task request identity binding | Opt-in (`broker.a2a_request_auth.policy`); `hooks.A2ARequestAuthHook`, PUBACK `UnauthorizedError` (0x02) |
+| HTTP gateway bearer authentication | Opt-in (`broker.a2a_gateway.tokens`); principal promoted to MQTT CONNECT user for policy binding |
 
 P1 is configured through `broker.a2a_registry` and is disabled by default.
 Enabling it registers the `a2a-registry` hook, attaches status annotations to
@@ -163,6 +180,15 @@ startup-only; auth/ACL/hooks remain the only hot-reloaded sections.
   extension fields are preserved. `jku` must match a configured prefix, and
   `kid`/`alg` select the JWKS key. Signature checks are off unless
   `require_security_metadata` or `allowed_jku_prefixes` is configured.
+- Unknown top-level Agent Card fields are kept as raw JSON and re-emitted on
+  reads, so a newer A2A version or an EMQX extension field is never silently
+  dropped by normalization or the admin API.
+- A result whose data/file parts are placed in `Message` (status message or
+  history) is rejected at the stream and gateway boundaries; outputs MUST be
+  attached as `Artifact` objects. Text-only control messages remain valid.
+- In-process `StreamHub` instances expire terminal-task tombstones after
+  `DefaultClosedTTL` (10 minutes) via `StartJanitor`; a late subscriber that
+  supplies the current task still receives a final event.
 
 ---
 

@@ -40,6 +40,7 @@ const fullCard = `{
 
 func testRegistry() *Registry {
 	cfg := *DefaultConfig()
+	cfg.Enabled = true
 	cfg.Validate = schema.ModeLoose
 	return New(cfg)
 }
@@ -89,6 +90,7 @@ func TestRegistryRejectsInvalidCard(t *testing.T) {
 
 func TestRegistryStrictMode(t *testing.T) {
 	cfg := *DefaultConfig()
+	cfg.Enabled = true
 	cfg.Validate = schema.ModeStrict
 	r := New(cfg)
 	addr := "org/unit/agent"
@@ -100,6 +102,7 @@ func TestRegistryStrictMode(t *testing.T) {
 
 func TestRegistryMaxCardSize(t *testing.T) {
 	cfg := *DefaultConfig()
+	cfg.Enabled = true
 	cfg.Validate = schema.ModeLoose
 	cfg.MaxCardSize = 32
 	r := New(cfg)
@@ -111,6 +114,7 @@ func TestRegistryMaxCardSize(t *testing.T) {
 func TestRegistryRateLimit(t *testing.T) {
 	base := time.Now()
 	cfg := *DefaultConfig()
+	cfg.Enabled = true
 	cfg.Validate = schema.ModeLoose
 	cfg.Registrations = 2
 	r := New(cfg)
@@ -147,7 +151,72 @@ func TestRegistryStatusTracking(t *testing.T) {
 	r.OnClientConnected(ctx, &hooks.ClientCtx{ClientID: addr})
 	r.OnClientDisconnected(ctx, &hooks.ClientCtx{ClientID: addr, Reason: "connection closed"})
 	e, _ = r.Get(addr)
+	assert.Equal(t, StatusLWT, e.Status)
 	assert.Equal(t, StatusSourceLWT, e.StatusSource)
+
+	r.OnClientConnected(ctx, &hooks.ClientCtx{ClientID: addr})
+	r.OnClientDisconnected(ctx, &hooks.ClientCtx{ClientID: addr, Reason: "disconnected by admin"})
+	e, _ = r.Get(addr)
+	assert.Equal(t, StatusOffline, e.Status)
+	assert.Equal(t, StatusSourceBroker, e.StatusSource)
+
+	r.OnClientConnected(ctx, &hooks.ClientCtx{ClientID: addr})
+	r.OnClientDisconnected(ctx, &hooks.ClientCtx{ClientID: addr, Reason: "kicked out"})
+	e, _ = r.Get(addr)
+	assert.Equal(t, StatusOffline, e.Status)
+	assert.Equal(t, StatusSourceBroker, e.StatusSource)
+}
+
+func TestRegistryCardPublishedAfterConnectIsOnline(t *testing.T) {
+	r := testRegistry()
+	addr := "com.example/factory-a/agent-1"
+	topic := hooks.A2ADiscoveryPrefix + addr
+
+	// The broker connects the client before it publishes its discovery card,
+	// so the connection hook runs while no registry entry exists yet.
+	r.OnClientConnected(context.Background(), &hooks.ClientCtx{ClientID: addr})
+	require.True(t, publish(t, r, addr, topic, []byte(validCard)))
+
+	e, ok := r.Get(addr)
+	require.True(t, ok)
+	assert.Equal(t, StatusOnline, e.Status)
+	assert.Equal(t, StatusSourceBroker, e.StatusSource)
+	props := r.AnnotateRetained(topic, nil)
+	assert.Equal(t, []byte(StatusOnline), props[PropertyAgentStatus])
+}
+
+func TestRegistrySetStatusAppliesBrokerDecision(t *testing.T) {
+	r := testRegistry()
+	addr := "org/unit/agent"
+	require.True(t, publish(t, r, addr, hooks.A2ADiscoveryPrefix+addr, []byte(validCard)))
+
+	r.SetStatus(addr, StatusOffline, StatusSourceBroker)
+	e, ok := r.Get(addr)
+	require.True(t, ok)
+	assert.Equal(t, StatusOffline, e.Status)
+	assert.Equal(t, StatusSourceBroker, e.StatusSource)
+}
+
+func TestDisabledRegistryIsNoOp(t *testing.T) {
+	r := New(*DefaultConfig())
+	addr := "org/unit/agent"
+	topic := hooks.A2ADiscoveryPrefix + addr
+
+	// A disabled Registry must not reject or mutate any MQTT traffic, even if
+	// a caller wires the hook by mistake.
+	require.True(t, publish(t, r, addr, topic, []byte(`{"name":"x"}`)))
+	r.OnClientConnected(context.Background(), &hooks.ClientCtx{ClientID: addr})
+	r.OnClientDisconnected(context.Background(), &hooks.ClientCtx{ClientID: addr, Reason: "connection closed"})
+	r.SetStatus(addr, StatusOnline, StatusSourceBroker)
+	assert.False(t, r.Delete(addr))
+
+	props := map[string][]byte{"custom": []byte("v")}
+	assert.Equal(t, props, r.AnnotateRetained(topic, props))
+
+	st := r.Stats()
+	assert.False(t, st.Enabled)
+	assert.Equal(t, 0, st.Registered)
+	assert.Zero(t, st.ValidationFails)
 }
 
 func TestRegistryAnnotation(t *testing.T) {
@@ -181,6 +250,7 @@ func TestRegistryIgnoresNonDiscoveryTopics(t *testing.T) {
 
 func TestRegistryRequiresSignedCardWhenConfigured(t *testing.T) {
 	cfg := *DefaultConfig()
+	cfg.Enabled = true
 	cfg.Validate = schema.ModeLoose
 	cfg.Security = &schema.SecurityConfig{RequireMetadata: true}
 	r := New(cfg)

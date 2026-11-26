@@ -63,8 +63,10 @@ type AgentCardSignature struct {
 }
 
 // AgentCard is an agent's self-description. This mirrors the A2A 1.0 fields
-// relevant to discovery; unknown fields are preserved on round-trip only in
-// normalized form (extra fields are not retained).
+// relevant to discovery. Unknown top-level fields are retained in Extra so a
+// card from a newer A2A version or an EMQX extension is never silently
+// truncated by the Registry. Extra is not part of the signed card field set on
+// its own; it is merged back by MarshalJSON using the original raw values.
 type AgentCard struct {
 	Name                string            `json:"name"`
 	Description         string            `json:"description"`
@@ -83,6 +85,69 @@ type AgentCard struct {
 	Security             []map[string][]string      `json:"security,omitempty"`
 	SecurityRequirements []map[string][]string      `json:"securityRequirements,omitempty"`
 	Signatures           []AgentCardSignature       `json:"signatures,omitempty"`
+
+	// Extra holds unknown top-level JSON fields from the published card. It is
+	// excluded from the struct marshaller and re-merged by MarshalJSON.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// agentCardJSONFields lists every top-level field decoded into AgentCard. Any
+// other JSON key is preserved verbatim in Extra.
+var agentCardJSONFields = map[string]bool{
+	"name": true, "description": true, "version": true, "url": true,
+	"supportedInterfaces": true, "capabilities": true,
+	"defaultInputModes": true, "defaultOutputModes": true,
+	"skills": true, "securitySchemes": true, "security": true,
+	"securityRequirements": true, "signatures": true,
+}
+
+// UnmarshalJSON decodes known fields and keeps unknown top-level fields as raw
+// JSON so normalization and admin API reads cannot silently drop them.
+func (c *AgentCard) UnmarshalJSON(data []byte) error {
+	type plain AgentCard
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	extra := make(map[string]json.RawMessage)
+	for key, value := range raw {
+		if !agentCardJSONFields[key] {
+			extra[key] = append(json.RawMessage(nil), value...)
+		}
+	}
+	*c = AgentCard(decoded)
+	if len(extra) > 0 {
+		c.Extra = extra
+	}
+	return nil
+}
+
+// MarshalJSON writes the known fields and any preserved extension fields.
+// Known fields always win so stale Extra values cannot overwrite normalized
+// values produced by Normalize.
+func (c AgentCard) MarshalJSON() ([]byte, error) {
+	type plain AgentCard
+	known, err := json.Marshal(plain(c))
+	if err != nil {
+		return nil, err
+	}
+	if len(c.Extra) == 0 {
+		return known, nil
+	}
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(known, &merged); err != nil {
+		return nil, err
+	}
+	for key, value := range c.Extra {
+		if _, exists := merged[key]; !exists {
+			merged[key] = value
+		}
+	}
+	return json.Marshal(merged)
 }
 
 // ValidationMode selects how strictly a published card is checked.
@@ -214,6 +279,12 @@ func Normalize(card *AgentCard, bindingURL string) *AgentCard {
 		out.SecuritySchemes = make(map[string]json.RawMessage, len(card.SecuritySchemes))
 		for k, v := range card.SecuritySchemes {
 			out.SecuritySchemes[k] = append(json.RawMessage(nil), v...)
+		}
+	}
+	if card.Extra != nil {
+		out.Extra = make(map[string]json.RawMessage, len(card.Extra))
+		for k, v := range card.Extra {
+			out.Extra[k] = append(json.RawMessage(nil), v...)
 		}
 	}
 

@@ -43,6 +43,7 @@ const (
 	ErrorUnsupportedOperation ErrorName = "UnsupportedOperationError"
 	ErrorVersionNotSupported  ErrorName = "VersionNotSupportedError"
 	ErrorAgentNotAvailable    ErrorName = "AgentNotAvailableError"
+	ErrorUnauthorized         ErrorName = "UnauthorizedError"
 	ErrorInternal             ErrorName = "InternalError"
 )
 
@@ -91,6 +92,8 @@ func (e ErrorName) RPCCode() int {
 		return -32004
 	case ErrorAgentNotAvailable:
 		return -32005
+	case ErrorUnauthorized:
+		return -32008
 	default:
 		return -32603
 	}
@@ -101,7 +104,7 @@ func (e ErrorName) MQTTReason() byte {
 	switch e {
 	case ErrorUnsupportedOperation, ErrorVersionNotSupported, ErrorMethodNotFound:
 		return ReasonNotSupported
-	case ErrorAgentNotAvailable:
+	case ErrorAgentNotAvailable, ErrorUnauthorized:
 		return ReasonNotAuthorized
 	default:
 		return ReasonImplementationError
@@ -134,6 +137,13 @@ func (e *SemanticError) UserProperties() map[string][]byte {
 // TaskNotFound builds the error used when a task ID is unknown.
 func TaskNotFound(id string) *SemanticError {
 	return NewError(ErrorTaskNotFound, "task not found: "+id)
+}
+
+// AgentNotFound builds the error used when a request targets an address with
+// no registered agent. The A2A 1.0 semantic name is TaskNotFoundError; the
+// message identifies the missing agent for callers.
+func AgentNotFound(address string) *SemanticError {
+	return NewError(ErrorTaskNotFound, "agent not found: "+address)
 }
 
 // TaskNotCancelable builds the error used when a terminal task is cancelled.

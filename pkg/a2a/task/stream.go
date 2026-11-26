@@ -51,8 +51,16 @@ type StreamHub struct {
 	mu         sync.RWMutex
 	streams    map[string]map[*Stream]struct{}
 	closed     map[string]bool
+	closedAt   map[string]time.Time
 	bufferSize int
+
+	janitorOnce sync.Once
+	janitorStop chan struct{}
 }
+
+// DefaultClosedTTL is how long a terminal task tombstone is kept so that a
+// late SubscribeToTask still receives an immediate final event.
+const DefaultClosedTTL = 10 * time.Minute
 
 // Stream is one SubscribeToTask stream. It stops receiving events after the
 // task reaches a terminal state; Done is closed at that point.
@@ -75,8 +83,83 @@ func NewStreamHub(bufferSize int) *StreamHub {
 	return &StreamHub{
 		streams:    make(map[string]map[*Stream]struct{}),
 		closed:     make(map[string]bool),
+		closedAt:   make(map[string]time.Time),
 		bufferSize: bufferSize,
 	}
+}
+
+// StartJanitor starts a background sweep of terminal-task tombstones. The
+// returned function stops the janitor and is safe to call more than once. A
+// nil hub or non-positive interval yields a no-op. Embedders with a long-lived
+// hub should call this to bound memory growth.
+func (h *StreamHub) StartJanitor(interval time.Duration) func() {
+	return h.StartJanitorWithTTL(interval, DefaultClosedTTL)
+}
+
+// StartJanitorWithTTL is StartJanitor with an explicit tombstone TTL. A
+// non-positive ttl disables expiry, which is useful only in tests.
+func (h *StreamHub) StartJanitorWithTTL(interval, ttl time.Duration) func() {
+	if h == nil || interval <= 0 {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	h.janitorOnce.Do(func() {
+		h.janitorStop = stop
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					h.SweepClosed(ttl)
+				case <-stop:
+					return
+				}
+			}
+		}()
+	})
+	return func() {
+		select {
+		case <-stop:
+		default:
+			close(stop)
+		}
+	}
+}
+
+// SweepClosed removes terminal-task tombstones older than ttl. Subscribers
+// must pass the current task to Subscribe; that event is still final, so
+// expiring a tombstone does not change terminal stream semantics. It returns
+// the number of tombstones removed.
+func (h *StreamHub) SweepClosed(ttl time.Duration) int {
+	if h == nil {
+		return 0
+	}
+	now := time.Now()
+	removed := 0
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for key, at := range h.closedAt {
+		if now.Sub(at) >= ttl {
+			delete(h.closedAt, key)
+			delete(h.closed, key)
+			removed++
+		}
+	}
+	return removed
+}
+
+// Stats reports hub occupancy for observability and tests.
+func (h *StreamHub) Stats() (streams, terminalTasks int) {
+	if h == nil {
+		return 0, 0
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for key := range h.streams {
+		streams += len(h.streams[key])
+	}
+	return streams, len(h.closed)
 }
 
 // Subscribe registers a stream for one task. The first event is the current
@@ -139,6 +222,9 @@ func (h *StreamHub) PublishStatus(address string, task *Task) error {
 		return fmt.Errorf("a2a: nil task status")
 	}
 	if err := ValidateTopicAddress(address, task.ID); err != nil {
+		return err
+	}
+	if err := ValidateTaskResult(task); err != nil {
 		return err
 	}
 	event := StreamEvent{
@@ -249,6 +335,7 @@ func (h *StreamHub) publish(event StreamEvent, terminal bool) {
 	if terminal {
 		h.mu.Lock()
 		h.closed[key] = true
+		h.closedAt[key] = time.Now()
 		for _, s := range streams {
 			delete(h.streams[key], s)
 			s.close()
