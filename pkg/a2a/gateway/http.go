@@ -20,6 +20,7 @@ package gateway
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -55,9 +56,10 @@ type AuthConfig struct {
 
 // Handler serves POST /a2a/v1/{org}/{unit}/{agent} JSON-RPC requests.
 type Handler struct {
-	bridge Bridge
-	lookup AgentLookup
-	auth   *AuthConfig
+	bridge       Bridge
+	streamBridge StreamBridge
+	lookup       AgentLookup
+	auth         *AuthConfig
 }
 
 // NewHandler creates a gateway HTTP handler backed by bridge.
@@ -75,6 +77,11 @@ func NewHandlerWithAgentLookup(bridge Bridge, lookup AgentLookup) *Handler {
 // authentication. A nil config or empty token map leaves authentication off.
 func NewHandlerWithAuth(bridge Bridge, lookup AgentLookup, auth *AuthConfig) *Handler {
 	return &Handler{bridge: bridge, lookup: lookup, auth: auth}
+}
+
+// NewStreamHandler creates a handler that also serves message/stream as SSE.
+func NewStreamHandler(bridge Bridge, streamBridge StreamBridge, lookup AgentLookup, auth *AuthConfig) *Handler {
+	return &Handler{bridge: bridge, streamBridge: streamBridge, lookup: lookup, auth: auth}
 }
 
 func (h *Handler) authenticate(r *http.Request) (string, bool) {
@@ -162,6 +169,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if principal != "" {
 		props[PropertyPrincipal] = []byte(principal)
 	}
+	if method == task.MethodMessageStream {
+		h.serveStream(w, r, address, req, props)
+		return
+	}
 	resp, err := h.bridge.Request(r.Context(), address, req, props)
 	if err != nil {
 		a2ametrics.IncGatewayRequest(method, "transport_error")
@@ -183,6 +194,85 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a2ametrics.IncGatewayRequest(method, "success")
 	}
 	writeRPC(w, http.StatusOK, resp)
+}
+
+// serveStream streams task events to the caller as Server-Sent Events. Each
+// SSE data frame is one A2A StreamEvent. The connection ends after a terminal
+// event or when the client disconnects.
+func (h *Handler) serveStream(w http.ResponseWriter, r *http.Request, address string, req *task.Request, props map[string][]byte) {
+	if h.streamBridge == nil {
+		a2ametrics.IncGatewayRequest(task.MethodMessageStream, "unsupported")
+		writeRPC(w, http.StatusNotImplemented, task.NewSemanticErrorResponse(req.ID,
+			task.NewError(task.ErrorUnsupportedOperation, "message/stream is not enabled")))
+		return
+	}
+	stream, err := h.streamBridge.Stream(r.Context(), address, req, props)
+	if err != nil {
+		a2ametrics.IncGatewayRequest(task.MethodMessageStream, "transport_error")
+		writeRPC(w, http.StatusBadGateway, task.NewSemanticErrorResponse(req.ID,
+			task.NewError(task.ErrorAgentNotAvailable, err.Error())))
+		return
+	}
+	defer stream.Close()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		a2ametrics.IncGatewayRequest(task.MethodMessageStream, "stream_unsupported")
+		writeRPC(w, http.StatusInternalServerError, task.NewSemanticErrorResponse(req.ID,
+			task.NewError(task.ErrorInternal, "streaming response is not supported")))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+	a2ametrics.IncGatewayRequest(task.MethodMessageStream, "stream_open")
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-stream.Done():
+			// Drain any buffered terminal event before closing.
+			for {
+				select {
+				case event := <-stream.Events():
+					if !writeSSE(w, flusher, event) {
+						return
+					}
+					if event.Final {
+						a2ametrics.IncGatewayRequest(task.MethodMessageStream, "stream_closed")
+						return
+					}
+				default:
+					a2ametrics.IncGatewayRequest(task.MethodMessageStream, "stream_closed")
+					return
+				}
+			}
+		case event := <-stream.Events():
+			if !writeSSE(w, flusher, event) {
+				return
+			}
+			if event.Final {
+				a2ametrics.IncGatewayRequest(task.MethodMessageStream, "stream_closed")
+				return
+			}
+		}
+	}
+}
+
+func writeSSE(w http.ResponseWriter, flusher http.Flusher, event task.StreamEvent) bool {
+	frame, err := json.Marshal(event)
+	if err != nil {
+		return false
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Kind, frame); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
 }
 
 func writeRPC(w http.ResponseWriter, status int, resp *task.Response) {
