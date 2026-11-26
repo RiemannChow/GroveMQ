@@ -37,6 +37,7 @@ import (
 	"github.com/turtacn/grovemq/pkg/a2a/gateway"
 	"github.com/turtacn/grovemq/pkg/a2a/registry"
 	"github.com/turtacn/grovemq/pkg/a2a/schema"
+	"github.com/turtacn/grovemq/pkg/a2a/task"
 	"github.com/turtacn/grovemq/pkg/admin"
 	"github.com/turtacn/grovemq/pkg/balancer"
 	"github.com/turtacn/grovemq/pkg/broker"
@@ -48,6 +49,7 @@ import (
 	"github.com/turtacn/grovemq/pkg/metrics"
 	"github.com/turtacn/grovemq/pkg/monitor"
 	clusterpb "github.com/turtacn/grovemq/pkg/proto/cluster"
+	"github.com/turtacn/grovemq/pkg/storage"
 	"github.com/turtacn/grovemq/pkg/tls"
 	"google.golang.org/grpc"
 )
@@ -377,7 +379,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create dashboard server: %v", err)
 	}
-	configureA2AGateway(dashboardServer, cfg.Broker.A2AGateway, cfg.Broker.MQTTPort, a2aRegistry)
+	configureA2AGateway(dashboardServer, cfg.Broker.A2AGateway, cfg.Broker.MQTTPort, a2aRegistry, b.GetStateStore())
 
 	// --- Start MQTT Broker ---
 	go func() {
@@ -532,7 +534,7 @@ func a2aMountpointRisk(bindingURL string) bool {
 // snapshot of the configuration at startup; changing it requires a restart.
 // A failure to create an explicitly enabled gateway is fatal so operators do
 // not silently lose the advertised HTTP endpoint.
-func configureA2AGateway(dashboardServer *dashboard.Server, cfg config.A2AGatewayConfig, mqttPort string, a2aRegistry *registry.Registry) {
+func configureA2AGateway(dashboardServer *dashboard.Server, cfg config.A2AGatewayConfig, mqttPort string, a2aRegistry *registry.Registry, stateStore storage.Store) {
 	if !cfg.Enabled {
 		log.Printf("[A2A] HTTP JSON-RPC gateway is disabled (start with broker.a2a_gateway.enabled=true)")
 		return
@@ -568,7 +570,26 @@ func configureA2AGateway(dashboardServer *dashboard.Server, cfg config.A2AGatewa
 		log.Fatalf("Failed to configure A2A streaming gateway: %v", err)
 	}
 	_ = streamBridge.Hub().StartJanitor(time.Minute)
-	var handler http.Handler = gateway.NewStreamHandler(bridge, streamBridge, lookup, auth)
+	a2aHandler := gateway.NewStreamHandler(bridge, streamBridge, lookup, auth)
+	// A2A 1.0 optional methods are answered locally. Capabilities and extended
+	// cards come from the registered Agent Card so each agent decides for
+	// itself; with the Registry disabled the global flags stay false.
+	compat := &gateway.CompatibilityContext{
+		PushStore:                  task.NewPushStore(),
+		RequireAuthForExtendedCard: len(cfg.Tokens) > 0,
+	}
+	if a2aRegistry != nil {
+		compat.Capabilities = a2aRegistry.Capabilities
+		compat.ExtendedCard = a2aRegistry.ExtendedCard
+	} else {
+		compat.PushNotificationsSupported = false
+		compat.ExtendedCardSupported = false
+	}
+	a2aHandler.SetCompatibilityContext(compat)
+	// Task/Artifact persistence mirrors successful results into the broker's
+	// durable store, so tasks/get survives an agent going offline or a restart.
+	a2aHandler.SetTaskStore(task.NewStore(stateStore))
+	var handler http.Handler = a2aHandler
 	if len(cfg.Tokens) == 0 {
 		log.Printf("[A2A] WARNING: HTTP JSON-RPC gateway has no bearer tokens configured; " +
 			"all callers are anonymous. Set broker.a2a_gateway.tokens or restrict network access.")

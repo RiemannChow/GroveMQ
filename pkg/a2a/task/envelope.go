@@ -33,6 +33,14 @@ const (
 	MethodTasksGet       = "tasks/get"
 	MethodTasksCancel    = "tasks/cancel"
 	MethodTasksSubscribe = "tasks/subscribe"
+
+	// Push notification configuration methods (A2A 1.0 §9.4.7).
+	MethodCreatePushConfig = "CreateTaskPushNotificationConfig"
+	MethodGetPushConfig    = "GetTaskPushNotificationConfig"
+	MethodListPushConfigs  = "ListTaskPushNotificationConfigs"
+	MethodDeletePushConfig = "DeleteTaskPushNotificationConfig"
+	// Extended Agent Card method (A2A 1.0 §9.4.8).
+	MethodGetExtendedCard = "GetExtendedAgentCard"
 )
 
 // Request is a JSON-RPC 2.0 request carrying an A2A abstract operation.
@@ -113,6 +121,16 @@ func NormalizeMethod(method string) string {
 		return MethodTasksCancel
 	case "tasks/subscribe", "subscribetotask", "subscribe_to_task":
 		return MethodTasksSubscribe
+	case "createtaskpushnotificationconfig", "create_task_push_notification_config", "createpushnotificationconfig":
+		return MethodCreatePushConfig
+	case "gettaskpushnotificationconfig", "get_task_push_notification_config", "getpushnotificationconfig":
+		return MethodGetPushConfig
+	case "listtaskpushnotificationconfigs", "list_task_push_notification_configs", "listpushnotificationconfigs":
+		return MethodListPushConfigs
+	case "deletetaskpushnotificationconfig", "delete_task_push_notification_config", "deletepushnotificationconfig":
+		return MethodDeletePushConfig
+	case "getextendedagentcard", "get_extended_agent_card", "agent/getextendedcard":
+		return MethodGetExtendedCard
 	default:
 		return method
 	}
@@ -122,7 +140,9 @@ func NormalizeMethod(method string) string {
 // GroveMQ can route over MQTT.
 func IsSupportedMethod(method string) bool {
 	switch NormalizeMethod(method) {
-	case MethodMessageSend, MethodMessageStream, MethodTasksGet, MethodTasksCancel, MethodTasksSubscribe:
+	case MethodMessageSend, MethodMessageStream, MethodTasksGet, MethodTasksCancel, MethodTasksSubscribe,
+		MethodCreatePushConfig, MethodGetPushConfig, MethodListPushConfigs, MethodDeletePushConfig,
+		MethodGetExtendedCard:
 		return true
 	default:
 		return false

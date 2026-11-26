@@ -35,16 +35,21 @@ const (
 type ErrorName string
 
 const (
-	ErrorInvalidRequest       ErrorName = "InvalidRequestError"
-	ErrorInvalidParams        ErrorName = "InvalidParamsError"
-	ErrorMethodNotFound       ErrorName = "MethodNotFoundError"
-	ErrorTaskNotFound         ErrorName = "TaskNotFoundError"
-	ErrorTaskNotCancelable    ErrorName = "TaskNotCancelableError"
-	ErrorUnsupportedOperation ErrorName = "UnsupportedOperationError"
-	ErrorVersionNotSupported  ErrorName = "VersionNotSupportedError"
-	ErrorAgentNotAvailable    ErrorName = "AgentNotAvailableError"
-	ErrorUnauthorized         ErrorName = "UnauthorizedError"
-	ErrorInternal             ErrorName = "InternalError"
+	ErrorInvalidRequest           ErrorName = "InvalidRequestError"
+	ErrorInvalidParams            ErrorName = "InvalidParamsError"
+	ErrorMethodNotFound           ErrorName = "MethodNotFoundError"
+	ErrorTaskNotFound             ErrorName = "TaskNotFoundError"
+	ErrorTaskNotCancelable        ErrorName = "TaskNotCancelableError"
+	ErrorPushNotSupported         ErrorName = "PushNotificationNotSupportedError"
+	ErrorUnsupportedOperation     ErrorName = "UnsupportedOperationError"
+	ErrorContentTypeNotSupported  ErrorName = "ContentTypeNotSupportedError"
+	ErrorInvalidAgentResponse     ErrorName = "InvalidAgentResponseError"
+	ErrorExtensionSupportRequired ErrorName = "ExtensionSupportRequiredError"
+	ErrorVersionNotSupported      ErrorName = "VersionNotSupportedError"
+	ErrorAgentNotAvailable        ErrorName = "AgentNotAvailableError"
+	ErrorUnauthorized             ErrorName = "UnauthorizedError"
+	ErrorExtendedCardMissing      ErrorName = "ExtendedAgentCardNotConfiguredError"
+	ErrorInternal                 ErrorName = "InternalError"
 )
 
 // SemanticError is an A2A error with a stable name, JSON-RPC code and MQTT
@@ -86,14 +91,25 @@ func (e ErrorName) RPCCode() int {
 		return -32001
 	case ErrorTaskNotCancelable:
 		return -32002
-	case ErrorUnsupportedOperation:
+	case ErrorPushNotSupported:
 		return -32003
-	case ErrorVersionNotSupported:
+	case ErrorUnsupportedOperation:
 		return -32004
-	case ErrorAgentNotAvailable:
+	case ErrorContentTypeNotSupported:
 		return -32005
-	case ErrorUnauthorized:
+	case ErrorInvalidAgentResponse:
+		return -32006
+	case ErrorExtendedCardMissing:
+		return -32007
+	case ErrorExtensionSupportRequired:
 		return -32008
+	case ErrorVersionNotSupported:
+		return -32009
+	// GroveMQ binding-specific extensions live outside the A2A 1.0 range.
+	case ErrorAgentNotAvailable:
+		return -32101
+	case ErrorUnauthorized:
+		return -32102
 	default:
 		return -32603
 	}
