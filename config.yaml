@@ -132,6 +132,19 @@ broker:
     username: ""              # optional MQTT client user for the bridge
     password: ""              # optional MQTT client password for the bridge
     timeout_seconds: 5        # 0 = built-in default (5s)
+    # Bearer token -> authenticated principal. Empty means NO gateway auth:
+    # set this in production or restrict /a2a/v1/ with a reverse proxy.
+    tokens: {}                # e.g. {"my-secret-token": "sdk-service"}
+
+  # --- A2A task request identity binding (opt-in, startup-only) ---
+  # Binds $a2a/v1/{org}/{unit}/{agent}/requests publishers to an identity.
+  #   off               : no extra check (default, zero regression)
+  #   caller            : only the agent itself may publish to its requests topic
+  #   agent_or_gateway  : agent itself, or a gateway client ID + authenticated user
+  a2a_request_auth:
+    policy: off
+    allowed_clients: []       # e.g. ["grovemq-gateway"]
+    allowed_usernames: []     # e.g. ["sdk-service"] (must match gateway token principal)
 
   # --- Load balancing (docs/design/LOAD_BALANCING.md) ---
   # All fields are optional; omitted values fall back to the same built-in

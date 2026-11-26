@@ -18,6 +18,7 @@
 package gateway
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -29,6 +30,10 @@ import (
 	"github.com/turtacn/grovemq/pkg/hooks"
 )
 
+// PropertyPrincipal carries the authenticated HTTP principal into the MQTT
+// bridge. The broker's A2A request-auth hook can bind it to the request topic.
+const PropertyPrincipal = hooks.A2APropertyPrincipal
+
 const (
 	// PathPrefix is the HTTP path prefix for the A2A gateway.
 	PathPrefix = "/a2a/v1/"
@@ -36,14 +41,57 @@ const (
 	MaxRequestBytes = 1 << 20
 )
 
+// AgentLookup reports whether an agent address is registered. When supplied,
+// the gateway rejects unknown addresses with the A2A TaskNotFoundError instead
+// of waiting for a transport timeout.
+type AgentLookup func(address string) bool
+
+// AuthConfig configures HTTP bearer-token authentication for the gateway.
+// Tokens map a raw bearer token to the principal forwarded to the MQTT bridge.
+// An empty token map disables authentication, preserving the legacy behaviour.
+type AuthConfig struct {
+	Tokens map[string]string
+}
+
 // Handler serves POST /a2a/v1/{org}/{unit}/{agent} JSON-RPC requests.
 type Handler struct {
 	bridge Bridge
+	lookup AgentLookup
+	auth   *AuthConfig
 }
 
 // NewHandler creates a gateway HTTP handler backed by bridge.
 func NewHandler(bridge Bridge) *Handler {
 	return &Handler{bridge: bridge}
+}
+
+// NewHandlerWithAgentLookup creates a handler that checks agent registration
+// before forwarding a request. A nil lookup keeps the bridge-only behaviour.
+func NewHandlerWithAgentLookup(bridge Bridge, lookup AgentLookup) *Handler {
+	return &Handler{bridge: bridge, lookup: lookup}
+}
+
+// NewHandlerWithAuth creates a handler with both agent lookup and bearer-token
+// authentication. A nil config or empty token map leaves authentication off.
+func NewHandlerWithAuth(bridge Bridge, lookup AgentLookup, auth *AuthConfig) *Handler {
+	return &Handler{bridge: bridge, lookup: lookup, auth: auth}
+}
+
+func (h *Handler) authenticate(r *http.Request) (string, bool) {
+	if h == nil || h.auth == nil || len(h.auth.Tokens) == 0 {
+		return "", true // authentication disabled
+	}
+	header := r.Header.Get("Authorization")
+	if len(header) < 8 || !strings.EqualFold(header[:7], "Bearer ") {
+		return "", false
+	}
+	token := strings.TrimSpace(header[7:])
+	for candidate, principal := range h.auth.Tokens {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) == 1 {
+			return principal, true
+		}
+	}
+	return "", false
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -63,6 +111,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a2ametrics.IncGatewayRequest("unknown", "invalid_address")
 		writeRPC(w, http.StatusBadRequest, task.NewSemanticErrorResponse(nil,
 			task.NewError(task.ErrorInvalidParams, "agent address must be {org}/{unit}/{agent}")))
+		return
+	}
+
+	principal, ok := h.authenticate(r)
+	if !ok {
+		a2ametrics.IncGatewayRequest("unknown", "unauthorized")
+		writeRPC(w, http.StatusUnauthorized, task.NewSemanticErrorResponse(nil,
+			task.NewError(task.ErrorUnauthorized, "missing or invalid bearer token")))
 		return
 	}
 
@@ -96,12 +152,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Method = method
 
-	resp, err := h.bridge.Request(r.Context(), address, req, propertiesFromHeaders(r.Header))
+	if h.lookup != nil && !h.lookup(address) {
+		a2ametrics.IncGatewayRequest(method, "agent_not_found")
+		writeRPC(w, http.StatusOK, task.NewSemanticErrorResponse(req.ID, task.AgentNotFound(address)))
+		return
+	}
+
+	props := propertiesFromHeaders(r.Header)
+	if principal != "" {
+		props[PropertyPrincipal] = []byte(principal)
+	}
+	resp, err := h.bridge.Request(r.Context(), address, req, props)
 	if err != nil {
 		a2ametrics.IncGatewayRequest(method, "transport_error")
 		writeRPC(w, http.StatusBadGateway, task.NewSemanticErrorResponse(req.ID,
 			task.NewError(task.ErrorAgentNotAvailable, err.Error())))
 		return
+	}
+	if resp != nil && resp.Error == nil {
+		if err := task.ValidateResultPlacement(resp.Result); err != nil {
+			a2ametrics.IncGatewayRequest(method, "invalid_result")
+			writeRPC(w, http.StatusBadGateway, task.NewSemanticErrorResponse(req.ID,
+				task.NewError(task.ErrorInternal, err.Error())))
+			return
+		}
 	}
 	if resp != nil && resp.Error != nil {
 		a2ametrics.IncGatewayRequest(method, "rpc_error")

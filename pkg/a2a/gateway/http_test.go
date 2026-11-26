@@ -140,3 +140,95 @@ func TestHTTPGatewayRequiresPostAndBridge(t *testing.T) {
 	rr = postRPC(t, handler, PathPrefix+"org/unit/agent", `{"jsonrpc":"2.0","id":"1","method":"tasks/get"}`, nil)
 	assert.Equal(t, http.StatusNotImplemented, rr.Code)
 }
+
+func TestHTTPGatewayRejectsOutputInMessage(t *testing.T) {
+	bridge := NewMemoryBridge()
+	bridge.Register("org/unit/agent", func(_ context.Context, _ string, _ *task.Request, _ map[string][]byte) (interface{}, *task.SemanticError) {
+		return &task.Task{
+			ID: "task-1",
+			Status: task.TaskStatus{State: task.TaskStateCompleted, Message: &task.Message{
+				Role:  "ROLE_AGENT",
+				Parts: []task.Part{{Kind: "data"}},
+			}},
+		}, nil
+	})
+
+	rr := postRPC(t, NewHandler(bridge), PathPrefix+"org/unit/agent",
+		`{"jsonrpc":"2.0","id":"req-1","method":"message/send","params":{}}`, nil)
+	require.Equal(t, http.StatusBadGateway, rr.Code)
+	var resp task.Response
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, task.ErrorInternal.RPCCode(), resp.Error.Code)
+	assert.Contains(t, resp.Error.Message, "Artifact")
+}
+
+func TestHTTPGatewayReturnsTaskNotFoundForUnknownAgent(t *testing.T) {
+	bridge := NewMemoryBridge()
+	called := false
+	bridge.Register("org/unit/agent", func(_ context.Context, _ string, _ *task.Request, _ map[string][]byte) (interface{}, *task.SemanticError) {
+		called = true
+		return &task.Task{}, nil
+	})
+	handler := NewHandlerWithAgentLookup(bridge, func(address string) bool {
+		return address == "org/unit/agent"
+	})
+
+	rr := postRPC(t, handler, PathPrefix+"org/unit/missing",
+		`{"jsonrpc":"2.0","id":"req-1","method":"message/send","params":{}}`, nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp task.Response
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, task.ErrorTaskNotFound.RPCCode(), resp.Error.Code)
+	assert.Contains(t, resp.Error.Message, "agent not found")
+	assert.False(t, called, "the bridge must not be called for an unknown agent")
+
+	// A registered address still reaches the bridge through the same handler.
+	rr = postRPC(t, handler, PathPrefix+"org/unit/agent",
+		`{"jsonrpc":"2.0","id":"req-2","method":"message/send","params":{}}`, nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.True(t, called)
+}
+
+func TestHTTPGatewayBearerAuth(t *testing.T) {
+	bridge := NewMemoryBridge()
+	bridge.Register("org/unit/agent", func(_ context.Context, _ string, _ *task.Request, _ map[string][]byte) (interface{}, *task.SemanticError) {
+		return &task.Task{ID: "t-1"}, nil
+	})
+	handler := NewHandlerWithAuth(bridge, nil, &AuthConfig{Tokens: map[string]string{"secret-token": "sdk-service"}})
+	body := `{"jsonrpc":"2.0","id":"1","method":"message/send","params":{}}`
+
+	// Missing token is rejected before the bridge is touched.
+	rr := postRPC(t, handler, PathPrefix+"org/unit/agent", body, nil)
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+	var resp task.Response
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, task.ErrorUnauthorized.RPCCode(), resp.Error.Code)
+
+	// Wrong token is rejected.
+	rr = postRPC(t, handler, PathPrefix+"org/unit/agent", body, map[string]string{"Authorization": "Bearer wrong"})
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+
+	// Valid token succeeds and forwards the principal to the bridge.
+	var gotPrincipal string
+	bridge.Register("org/unit/agent", func(_ context.Context, _ string, _ *task.Request, props map[string][]byte) (interface{}, *task.SemanticError) {
+		gotPrincipal = string(props[PropertyPrincipal])
+		return &task.Task{ID: "t-1"}, nil
+	})
+	rr = postRPC(t, handler, PathPrefix+"org/unit/agent", body, map[string]string{"Authorization": "Bearer secret-token"})
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "sdk-service", gotPrincipal)
+}
+
+func TestHTTPGatewayAuthDisabledByEmptyTokens(t *testing.T) {
+	bridge := NewMemoryBridge()
+	bridge.Register("org/unit/agent", func(_ context.Context, _ string, _ *task.Request, _ map[string][]byte) (interface{}, *task.SemanticError) {
+		return &task.Task{ID: "t-1"}, nil
+	})
+	handler := NewHandlerWithAuth(bridge, nil, &AuthConfig{})
+	rr := postRPC(t, handler, PathPrefix+"org/unit/agent",
+		`{"jsonrpc":"2.0","id":"1","method":"message/send","params":{}}`, nil)
+	assert.Equal(t, http.StatusOK, rr.Code)
+}

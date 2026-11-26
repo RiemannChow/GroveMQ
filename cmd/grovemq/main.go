@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -42,6 +44,7 @@ import (
 	"github.com/turtacn/grovemq/pkg/config"
 	"github.com/turtacn/grovemq/pkg/dashboard"
 	"github.com/turtacn/grovemq/pkg/discovery"
+	"github.com/turtacn/grovemq/pkg/hooks"
 	"github.com/turtacn/grovemq/pkg/metrics"
 	"github.com/turtacn/grovemq/pkg/monitor"
 	clusterpb "github.com/turtacn/grovemq/pkg/proto/cluster"
@@ -334,9 +337,11 @@ func main() {
 	// The Registry observes retained Agent Cards on $a2a/v1/discovery/#,
 	// indexes them for the admin API, and annotates retained cards with the
 	// current a2a-status at delivery time. It is completely off by default.
-	if err = configureA2ARegistry(b, adminAPI, cfg.Broker.A2ARegistry); err != nil {
+	a2aRegistry, err := configureA2ARegistry(b, adminAPI, cfg.Broker.A2ARegistry)
+	if err != nil {
 		log.Fatalf("Failed to configure A2A Registry: %v", err)
 	}
+	configureA2ARequestAuth(b, cfg.Broker.A2ARequestAuth)
 
 	// Dashboard Server
 	dashboardConfig := dashboard.DefaultConfig()
@@ -369,7 +374,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create dashboard server: %v", err)
 	}
-	configureA2AGateway(dashboardServer, cfg.Broker.A2AGateway, cfg.Broker.MQTTPort)
+	configureA2AGateway(dashboardServer, cfg.Broker.A2AGateway, cfg.Broker.MQTTPort, a2aRegistry)
 
 	// --- Start MQTT Broker ---
 	go func() {
@@ -470,13 +475,13 @@ func main() {
 // configureA2ARegistry creates and wires the optional A2A Registry. A disabled
 // configuration leaves the broker and admin API untouched. A2A settings are
 // startup-only: changing them requires a restart, unlike auth/ACL/hooks.
-func configureA2ARegistry(b *broker.Broker, api *admin.APIServer, cfg config.A2ARegistryConfig) error {
+func configureA2ARegistry(b *broker.Broker, api *admin.APIServer, cfg config.A2ARegistryConfig) (*registry.Registry, error) {
 	if !cfg.Enabled {
-		return nil
+		return nil, nil
 	}
 	mode, err := schema.ParseMode(cfg.Validate)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	r := registry.New(registry.Config{
 		Enabled:       true,
@@ -492,9 +497,31 @@ func configureA2ARegistry(b *broker.Broker, api *admin.APIServer, cfg config.A2A
 	b.GetHooks().Register(r)
 	b.RetainedAnnotationFunc = r.AnnotateRetained
 	api.SetA2AProvider(admin.NewA2AProvider(r))
+	bindingURL := effectiveBindingURL(cfg.BindingURL)
 	log.Printf("[A2A] Registry enabled: validate=%s max_card_size=%d rate_limit=%d/min binding_url=%s",
-		mode, cfg.MaxCardSize, cfg.RegistrationRate, effectiveBindingURL(cfg.BindingURL))
-	return nil
+		mode, cfg.MaxCardSize, cfg.RegistrationRate, bindingURL)
+	if a2aMountpointRisk(bindingURL) {
+		log.Printf("[A2A] WARNING: the configured binding URL has a multi-level path. A2A discovery" +
+			" uses reserved $a2a/v1/... topics; a broker mountpoint must be exactly one topic level" +
+			" (or absent), otherwise registration and discovery will not match.")
+	}
+	return r, nil
+}
+
+// a2aMountpointRisk reports whether bindingURL carries a topic-like path with
+// more than one level. EMQX documents that A2A Registry is incompatible with
+// mountpoints deeper than one level; GroveMQ has no native mountpoint setting,
+// so this detects the equivalent risk on the advertised binding URL.
+func a2aMountpointRisk(bindingURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(bindingURL))
+	if err != nil {
+		return false
+	}
+	path := strings.Trim(u.Path, "/")
+	if path == "" {
+		return false
+	}
+	return len(strings.Split(path, "/")) > 1
 }
 
 // configureA2AGateway creates the optional HTTP JSON-RPC to MQTT bridge and
@@ -502,7 +529,7 @@ func configureA2ARegistry(b *broker.Broker, api *admin.APIServer, cfg config.A2A
 // snapshot of the configuration at startup; changing it requires a restart.
 // A failure to create an explicitly enabled gateway is fatal so operators do
 // not silently lose the advertised HTTP endpoint.
-func configureA2AGateway(dashboardServer *dashboard.Server, cfg config.A2AGatewayConfig, mqttPort string) {
+func configureA2AGateway(dashboardServer *dashboard.Server, cfg config.A2AGatewayConfig, mqttPort string, a2aRegistry *registry.Registry) {
 	if !cfg.Enabled {
 		log.Printf("[A2A] HTTP JSON-RPC gateway is disabled (start with broker.a2a_gateway.enabled=true)")
 		return
@@ -517,9 +544,42 @@ func configureA2AGateway(dashboardServer *dashboard.Server, cfg config.A2AGatewa
 	if err != nil {
 		log.Fatalf("Failed to configure A2A gateway: %v", err)
 	}
-	dashboardServer.SetA2AGateway(gateway.NewHandler(bridge))
+	// With the Registry enabled, unknown agent addresses fail fast with the
+	// TaskNotFoundError semantic error instead of waiting for a bridge timeout.
+	var lookup gateway.AgentLookup
+	if a2aRegistry != nil {
+		lookup = func(address string) bool {
+			_, ok := a2aRegistry.Get(address)
+			return ok
+		}
+	}
+	auth := &gateway.AuthConfig{Tokens: cfg.Tokens}
+	var handler http.Handler = gateway.NewHandlerWithAuth(bridge, lookup, auth)
+	if len(cfg.Tokens) == 0 {
+		log.Printf("[A2A] WARNING: HTTP JSON-RPC gateway has no bearer tokens configured; " +
+			"all callers are anonymous. Set broker.a2a_gateway.tokens or restrict network access.")
+	} else {
+		log.Printf("[A2A] HTTP JSON-RPC gateway bearer authentication enabled for %d token(s)", len(cfg.Tokens))
+	}
+	dashboardServer.SetA2AGateway(handler)
 	log.Printf("[A2A] HTTP JSON-RPC gateway enabled at %s{org}/{unit}/{agent} via %s",
 		gateway.PathPrefix, effectiveGatewayBrokerURL(cfg.MQTTBrokerURL, mqttPort))
+}
+
+// configureA2ARequestAuth installs the broker-side identity policy for A2A task
+// requests. Policy "off" is a no-op so existing deployments are unchanged.
+func configureA2ARequestAuth(b *broker.Broker, cfg config.A2ARequestAuthConfig) {
+	policy := hooks.NormalizeA2ARequestAuthPolicy(cfg.Policy)
+	if policy == hooks.A2ARequestAuthPolicyOff {
+		return
+	}
+	b.GetHooks().Register(hooks.NewA2ARequestAuthHook(hooks.A2ARequestAuthConfig{
+		Policy:           policy,
+		AllowedClients:   cfg.AllowedClients,
+		AllowedUsernames: cfg.AllowedUsernames,
+	}))
+	log.Printf("[A2A] task request identity policy enabled: %s (allowed_clients=%d allowed_usernames=%d)",
+		policy, len(cfg.AllowedClients), len(cfg.AllowedUsernames))
 }
 
 // effectiveGatewayBrokerURL resolves an empty gateway URL to the local MQTT

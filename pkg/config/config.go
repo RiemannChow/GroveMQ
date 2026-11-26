@@ -105,11 +105,20 @@ type A2ARegistryConfig struct {
 // It lets standard A2A SDKs call agents over /a2a/v1/... without changing
 // their JSON-RPC binding code.
 type A2AGatewayConfig struct {
-	Enabled        bool   `yaml:"enabled" json:"enabled"`
-	MQTTBrokerURL  string `yaml:"mqtt_broker_url" json:"mqtt_broker_url"` // empty = local broker
-	Username       string `yaml:"username" json:"username"`               // MQTT client user for the bridge
-	Password       string `yaml:"password" json:"password"`               // MQTT client password for the bridge
-	TimeoutSeconds int    `yaml:"timeout_seconds" json:"timeout_seconds"` // 0 = 5s
+	Enabled        bool              `yaml:"enabled" json:"enabled"`
+	MQTTBrokerURL  string            `yaml:"mqtt_broker_url" json:"mqtt_broker_url"` // empty = local broker
+	Username       string            `yaml:"username" json:"username"`               // MQTT client user for the bridge
+	Password       string            `yaml:"password" json:"password"`               // MQTT client password for the bridge
+	TimeoutSeconds int               `yaml:"timeout_seconds" json:"timeout_seconds"` // 0 = 5s
+	Tokens         map[string]string `yaml:"tokens" json:"tokens"`                   // bearer token -> principal; empty disables auth
+}
+
+// A2ARequestAuthConfig configures broker-side identity binding for A2A task
+// requests published to $a2a/v1/{org}/{unit}/{agent}/requests.
+type A2ARequestAuthConfig struct {
+	Policy           string   `yaml:"policy" json:"policy"`                       // off | caller | agent_or_gateway
+	AllowedClients   []string `yaml:"allowed_clients" json:"allowed_clients"`     // gateway MQTT client IDs
+	AllowedUsernames []string `yaml:"allowed_usernames" json:"allowed_usernames"` // authenticated principals
 }
 
 // BalanceConfig groups the access-layer (and forwarding-layer) load-balancing
@@ -126,18 +135,19 @@ type BalanceConfig struct {
 
 // BrokerConfig represents the overall broker configuration
 type BrokerConfig struct {
-	NodeID        string            `yaml:"node_id" json:"node_id"`
-	MQTTPort      string            `yaml:"mqtt_port" json:"mqtt_port"`
-	WebSocketPort string            `yaml:"websocket_port" json:"websocket_port"` // empty = WebSocket gateway disabled
-	GRPCPort      string            `yaml:"grpc_port" json:"grpc_port"`
-	MetricsPort   string            `yaml:"metrics_port" json:"metrics_port"`
-	DashboardPort string            `yaml:"dashboard_port" json:"dashboard_port"`
-	Auth          AuthConfig        `yaml:"auth" json:"auth"`
-	ACL           ACLConfig         `yaml:"acl" json:"acl"`
-	Hooks         HookConfig        `yaml:"hooks" json:"hooks"`
-	Balance       BalanceConfig     `yaml:"balance" json:"balance"`
-	A2ARegistry   A2ARegistryConfig `yaml:"a2a_registry" json:"a2a_registry"`
-	A2AGateway    A2AGatewayConfig  `yaml:"a2a_gateway" json:"a2a_gateway"`
+	NodeID         string               `yaml:"node_id" json:"node_id"`
+	MQTTPort       string               `yaml:"mqtt_port" json:"mqtt_port"`
+	WebSocketPort  string               `yaml:"websocket_port" json:"websocket_port"` // empty = WebSocket gateway disabled
+	GRPCPort       string               `yaml:"grpc_port" json:"grpc_port"`
+	MetricsPort    string               `yaml:"metrics_port" json:"metrics_port"`
+	DashboardPort  string               `yaml:"dashboard_port" json:"dashboard_port"`
+	Auth           AuthConfig           `yaml:"auth" json:"auth"`
+	ACL            ACLConfig            `yaml:"acl" json:"acl"`
+	Hooks          HookConfig           `yaml:"hooks" json:"hooks"`
+	Balance        BalanceConfig        `yaml:"balance" json:"balance"`
+	A2ARegistry    A2ARegistryConfig    `yaml:"a2a_registry" json:"a2a_registry"`
+	A2AGateway     A2AGatewayConfig     `yaml:"a2a_gateway" json:"a2a_gateway"`
+	A2ARequestAuth A2ARequestAuthConfig `yaml:"a2a_request_auth" json:"a2a_request_auth"`
 
 	// MailboxSize is the capacity of each subscriber's delivery mailbox. A
 	// slow or stalled subscriber fills its mailbox; once full, best-effort
@@ -220,6 +230,12 @@ func DefaultConfig() *Config {
 				Username:       "",
 				Password:       "",
 				TimeoutSeconds: 5,
+				Tokens:         nil,
+			},
+			// A2A request identity binding is OFF by default so existing MQTT
+			// traffic and A2A deployments keep their current behaviour.
+			A2ARequestAuth: A2ARequestAuthConfig{
+				Policy: "off",
 			},
 			// Load balancing defaults are the safe baseline: no new behaviour
 			// during rolling upgrades (design §3 G5).
@@ -371,6 +387,14 @@ func validateConfig(config *Config) error {
 	}
 	if config.Broker.A2AGateway.TimeoutSeconds < 0 {
 		return fmt.Errorf("a2a_gateway.timeout_seconds must be >= 0, got %d", config.Broker.A2AGateway.TimeoutSeconds)
+	}
+	// Validate A2A request identity policy (off by default).
+	switch strings.ToLower(strings.TrimSpace(config.Broker.A2ARequestAuth.Policy)) {
+	case "", "off", "disabled", "false", "caller", "strict", "self",
+		"agent_or_gateway", "gateway", "agent-or-gateway":
+	default:
+		return fmt.Errorf("a2a_request_auth.policy must be off, caller, or agent_or_gateway, got %q",
+			config.Broker.A2ARequestAuth.Policy)
 	}
 
 	// Validate hooks configuration.

@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/turtacn/grovemq/pkg/a2a/registry"
 	"github.com/turtacn/grovemq/pkg/hooks"
 	"github.com/turtacn/grovemq/pkg/retainer"
 	"github.com/turtacn/grovemq/pkg/storage/messages"
@@ -105,4 +106,40 @@ func BenchmarkA2ABaseline_IdentityHook(b *testing.B) {
 			b.Fatalf("identity hook rejected valid registration")
 		}
 	}
+}
+
+// BenchmarkA2ABaseline_DisabledRegistry compares the existing identity-hook
+// path with the same path followed by a disabled A2A Registry hook. Definition
+// of Done item 8 requires these to stay equivalent when
+// broker.a2a_registry.enable=false; a regression shows up as a growing gap.
+func BenchmarkA2ABaseline_DisabledRegistry(b *testing.B) {
+	identity := hooks.NewA2AIdentityHook()
+	disabled := registry.New(*registry.DefaultConfig())
+	ctx := context.Background()
+	c := &hooks.MessagePublishCtx{
+		Topic:    "$a2a/v1/discovery/org/unit/agent-1",
+		ClientID: "org/unit/agent-1",
+		Payload:  []byte(`{"name":"agent","skills":[]}`),
+	}
+
+	b.Run("identity_only", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			res, err := identity.OnMessagePublish(ctx, c)
+			if err != nil || res == nil || !res.Allow {
+				b.Fatal("identity hook rejected valid registration")
+			}
+		}
+	})
+	b.Run("identity_plus_disabled_registry", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			res, err := identity.OnMessagePublish(ctx, c)
+			if err != nil || res == nil || !res.Allow {
+				b.Fatal("identity hook rejected valid registration")
+			}
+			res, err = disabled.OnMessagePublish(ctx, c)
+			if err != nil || res == nil || !res.Allow {
+				b.Fatal("disabled registry changed the publish decision")
+			}
+		}
+	})
 }

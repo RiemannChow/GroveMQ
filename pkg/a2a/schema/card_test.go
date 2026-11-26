@@ -15,6 +15,8 @@
 package schema
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -117,4 +119,81 @@ func TestParseMode(t *testing.T) {
 
 	_, err = ParseMode("bogus")
 	assert.Error(t, err)
+}
+
+func TestUnknownCardFieldsSurviveNormalizeAndMarshal(t *testing.T) {
+	raw := `{"name":"n","description":"d","version":"1","url":"mqtt://b:1883",` +
+		`"skills":[{"id":"a","name":"a","description":"a"}],` +
+		`"x-vendor-extension":{"enabled":true,"tier":3},"x-future-field":[1,2]}`
+	card, err := ValidateAndNormalize([]byte(raw), ModeLoose, "mqtt://fallback:1883")
+	require.NoError(t, err)
+
+	require.Contains(t, card.Extra, "x-vendor-extension")
+	require.Contains(t, card.Extra, "x-future-field")
+
+	out, err := json.Marshal(card)
+	require.NoError(t, err)
+	var decoded map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(out, &decoded))
+	assert.JSONEq(t, `{"enabled":true,"tier":3}`, string(decoded["x-vendor-extension"]))
+	assert.JSONEq(t, `[1,2]`, string(decoded["x-future-field"]))
+
+	// Normalization must fill known fields without losing extension data.
+	assert.NotEmpty(t, card.SupportedInterfaces)
+	assert.NoError(t, Validate(card, ModeStrict))
+}
+
+func TestKnownCardFieldsWinOverStaleExtra(t *testing.T) {
+	card, err := Parse([]byte(`{"name":"n","description":"d","version":"1","skills":[]}`))
+	require.NoError(t, err)
+	card.Extra = map[string]json.RawMessage{"name": json.RawMessage(`"stale"`)}
+
+	out, err := json.Marshal(card)
+	require.NoError(t, err)
+	var decoded map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(out, &decoded))
+	assert.JSONEq(t, `"n"`, string(decoded["name"]))
+}
+
+// TestEMQXCardFieldsSurviveGroveMQNormalization covers Definition of Done item
+// 7: the simplified card shape accepted by EMQX 6.2 is accepted by GroveMQ and
+// none of its fields are changed, only derived A2A 1.0 fields are added.
+func TestEMQXCardFieldsSurviveGroveMQNormalization(t *testing.T) {
+	parsed, err := Parse([]byte(simplifiedCard))
+	require.NoError(t, err)
+	require.NoError(t, Validate(parsed, ModeLoose))
+	normalized := Normalize(parsed, "mqtt://grovemq:1883")
+
+	out, err := json.Marshal(normalized)
+	require.NoError(t, err)
+	var got map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(out, &got))
+	var want map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(simplifiedCard), &want))
+
+	for _, key := range []string{"name", "description", "version", "url"} {
+		assert.JSONEq(t, string(want[key]), string(got[key]), key)
+	}
+	var skills []map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(got["skills"], &skills))
+	require.Len(t, skills, 1)
+	assert.JSONEq(t, `"device-diagnostics"`, string(skills[0]["id"]))
+	assert.JSONEq(t, `"Device Diagnostics"`, string(skills[0]["name"]))
+	assert.JSONEq(t, `"Analyzes telemetry."`, string(skills[0]["description"]))
+
+	require.NoError(t, Validate(normalized, ModeStrict))
+	assert.Equal(t, ProtocolBindingMQTT, normalized.SupportedInterfaces[0].ProtocolBinding)
+}
+
+// TestFullA2ACardRoundTripsUnchanged verifies that a strict A2A 1.0 card with
+// an EMQX extension field survives a GroveMQ read without field differences.
+func TestFullA2ACardRoundTripsUnchanged(t *testing.T) {
+	raw := strings.Replace(fullCard, `"skills":`, `"x-emqx-agent-type":"mqtt","skills":`, 1)
+	card, err := Parse([]byte(raw))
+	require.NoError(t, err)
+	require.NoError(t, Validate(card, ModeStrict))
+
+	out, err := json.Marshal(card)
+	require.NoError(t, err)
+	assert.JSONEq(t, raw, string(out))
 }
