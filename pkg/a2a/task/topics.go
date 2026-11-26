@@ -31,6 +31,10 @@ const (
 	// InboxSuffix is the optional generic response topic advertised by an
 	// Agent Card. Responses normally travel through MQTT v5 Response Topic.
 	InboxSuffix = "/inbox"
+	// SharedPrefix is the MQTT 5 shared-subscription prefix. A2A agents that
+	// scale out use "$share/<group>/<request topic>" so each task request is
+	// delivered to exactly one worker in the group.
+	SharedPrefix = "$share/"
 )
 
 // RequestTopic returns the request topic for a three-part agent address.
@@ -63,6 +67,59 @@ func InboxTopic(address string) (string, error) {
 		return "", err
 	}
 	return TopicPrefix + address + InboxSuffix, nil
+}
+
+// ValidateSharedGroup checks that a shared-subscription group name is safe to
+// embed in an MQTT topic filter. MQTT forbids wildcards and '/' in the group
+// segment; A2A additionally rejects '$' so a group cannot smuggle a reserved
+// topic prefix.
+func ValidateSharedGroup(group string) error {
+	if group == "" {
+		return fmt.Errorf("a2a: shared subscription group is required")
+	}
+	for _, r := range group {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		default:
+			return fmt.Errorf("a2a: invalid character %q in shared group %q", r, group)
+		}
+	}
+	return nil
+}
+
+// SharedRequestTopic returns the MQTT shared-subscription filter an agent
+// worker pool uses to consume task requests. Every member subscribes to the
+// same filter; the broker delivers each request to exactly one worker.
+func SharedRequestTopic(group, address string) (string, error) {
+	if err := ValidateSharedGroup(group); err != nil {
+		return "", err
+	}
+	request, err := RequestTopic(address)
+	if err != nil {
+		return "", err
+	}
+	return SharedPrefix + group + "/" + request, nil
+}
+
+// ParseSharedRequestTopic extracts the group and agent address from a shared
+// request filter produced by SharedRequestTopic. Non-shared filters and
+// malformed values are reported as not matching.
+func ParseSharedRequestTopic(filter string) (group, address string, ok bool) {
+	if !strings.HasPrefix(filter, SharedPrefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(filter, SharedPrefix)
+	idx := strings.IndexByte(rest, '/')
+	if idx <= 0 {
+		return "", "", false
+	}
+	group = rest[:idx]
+	request := rest[idx+1:]
+	if ValidateSharedGroup(group) != nil {
+		return "", "", false
+	}
+	address, ok = ParseRequestTopic(request)
+	return group, address, ok
 }
 
 // ParseRequestTopic extracts an agent address from an A2A request topic.

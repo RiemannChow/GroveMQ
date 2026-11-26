@@ -21,6 +21,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	stderrors "errors"
 	"log"
 	"sort"
@@ -391,6 +392,37 @@ func (r *Registry) RestoreCard(address string, payload []byte) bool {
 		a2ametrics.IncRegistration("restored")
 	}
 	return true
+}
+
+// ExtendedCard returns the x-extended-card extension from a registered Agent
+// Card. The extension is authenticated by the fact that only the agent itself
+// can publish its discovery topic (Client ID binding), so no separate secret is
+// needed. A missing or empty extension returns false.
+func (r *Registry) ExtendedCard(address string) (json.RawMessage, bool) {
+	if r == nil || !r.cfg.Enabled {
+		return nil, false
+	}
+	e, ok := r.Get(address)
+	if !ok || e.Card == nil || len(e.Card.Extra) == 0 {
+		return nil, false
+	}
+	raw, ok := e.Card.Extra["x-extended-card"]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	return append(json.RawMessage(nil), raw...), true
+}
+
+// Capabilities reports the registered agent's optional capability flags.
+func (r *Registry) Capabilities(address string) (streaming, push, extended bool) {
+	if r == nil || !r.cfg.Enabled {
+		return false, false, false
+	}
+	e, ok := r.Get(address)
+	if !ok || e.Card == nil {
+		return false, false, false
+	}
+	return e.Card.Capabilities.Streaming, e.Card.Capabilities.PushNotifications, e.Card.Capabilities.ExtendedAgentCard
 }
 
 // Get returns a copy of one registry entry.

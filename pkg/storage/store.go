@@ -21,6 +21,8 @@ package storage
 
 import (
 	"errors"
+	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -102,4 +104,37 @@ func (s *MemStore) Delete(key string) error {
 	defer s.mu.Unlock()
 	delete(s.data, key)
 	return nil
+}
+
+// ForEach iterates over every stored key/value pair. It mirrors BoltStore's
+// optional enumeration method so agents that rebuild an index from the store
+// (e.g. A2A task persistence) work identically with the in-memory backend.
+// The callback receives a copy of raw []byte values; it must not mutate the
+// store while iterating.
+func (s *MemStore) ForEach(fn func(key string, value []byte) error) error {
+	s.mu.RLock()
+	entries := make(map[string][]byte, len(s.data))
+	for k, v := range s.data {
+		if raw, ok := v.([]byte); ok {
+			entries[k] = append([]byte(nil), raw...)
+		} else {
+			entries[k] = []byte(fmt.Sprint(v))
+		}
+	}
+	s.mu.RUnlock()
+	for _, k := range sortedKeys(entries) {
+		if err := fn(k, entries[k]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sortedKeys(m map[string][]byte) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
