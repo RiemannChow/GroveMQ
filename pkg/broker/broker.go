@@ -69,13 +69,14 @@ const qosDuplicateWindow = 30 * time.Second
 // session management, cluster communication, authentication, retained messages,
 // and connector management.
 type Broker struct {
-	sup       supervisor.Supervisor
-	sessions  storage.Store
-	topics    *topic.Store
-	cluster   *cluster.Manager
-	nodeID    string
-	authChain *auth.AuthChain
-	retainer  *retainer.Retainer
+	sup        supervisor.Supervisor
+	sessions   storage.Store
+	stateStore storage.Store // durable session store, shared with A2A task persistence
+	topics     *topic.Store
+	cluster    *cluster.Manager
+	nodeID     string
+	authChain  *auth.AuthChain
+	retainer   *retainer.Retainer
 
 	// TLS and certificate management
 	certManager *tlspkg.CertificateManager
@@ -292,6 +293,7 @@ func New(nodeID string, clusterMgr *cluster.Manager) *Broker {
 	b := &Broker{
 		sup:                  supervisor.NewOneForOneSupervisor(),
 		sessions:             storage.NewMemStore(),
+		stateStore:           sessionStore,
 		topics:               topic.NewStore(),
 		cluster:              clusterMgr,
 		nodeID:               nodeID,
@@ -409,6 +411,17 @@ func (b *Broker) GetRetainedMessages(ctx context.Context, filter string) ([]reta
 		return nil, fmt.Errorf("broker: retainer is not available")
 	}
 	return b.retainer.GetRetainedMessages(ctx, filter)
+}
+
+// GetStateStore returns the broker's durable key-value store, shared with the
+// A2A Task persistence layer. It is nil-safe and may point at an in-memory
+// store when GROVEMQ_DATA_DIR is unset. Keys are namespaced by callers so A2A
+// task records never collide with MQTT session records.
+func (b *Broker) GetStateStore() storage.Store {
+	if b == nil {
+		return nil
+	}
+	return b.stateStore
 }
 
 // GetHooks returns the hooks manager for registering/inspecting extension-point

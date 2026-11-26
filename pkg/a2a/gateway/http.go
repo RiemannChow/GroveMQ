@@ -60,6 +60,8 @@ type Handler struct {
 	streamBridge StreamBridge
 	lookup       AgentLookup
 	auth         *AuthConfig
+	compat       *CompatibilityContext
+	store        *task.Store
 }
 
 // NewHandler creates a gateway HTTP handler backed by bridge.
@@ -82,6 +84,22 @@ func NewHandlerWithAuth(bridge Bridge, lookup AgentLookup, auth *AuthConfig) *Ha
 // NewStreamHandler creates a handler that also serves message/stream as SSE.
 func NewStreamHandler(bridge Bridge, streamBridge StreamBridge, lookup AgentLookup, auth *AuthConfig) *Handler {
 	return &Handler{bridge: bridge, streamBridge: streamBridge, lookup: lookup, auth: auth}
+}
+
+// SetCompatibilityContext enables local handling of A2A 1.0 optional methods.
+func (h *Handler) SetCompatibilityContext(compat *CompatibilityContext) {
+	if h != nil {
+		h.compat = compat
+	}
+}
+
+// SetTaskStore enables durable Task/Artifact persistence. A nil store keeps
+// the gateway stateless. Successful Task results are mirrored into the store
+// and tasks/get can be answered from it while the agent is offline.
+func (h *Handler) SetTaskStore(store *task.Store) {
+	if h != nil {
+		h.store = store
+	}
 }
 
 func (h *Handler) authenticate(r *http.Request) (string, bool) {
@@ -159,7 +177,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Method = method
 
+	if result, rpcErr, handled := serveCompatibilityMethod(h.compat, req, address, principal); handled {
+		if rpcErr != nil {
+			a2ametrics.IncGatewayRequest(method, "rpc_error")
+			writeRPC(w, http.StatusOK, rpcErr)
+			return
+		}
+		resp, err := task.NewResponse(req.ID, result)
+		if err != nil {
+			a2ametrics.IncGatewayRequest(method, "invalid_result")
+			writeRPC(w, http.StatusInternalServerError, task.NewSemanticErrorResponse(req.ID,
+				task.NewError(task.ErrorInternal, err.Error())))
+			return
+		}
+		a2ametrics.IncGatewayRequest(method, "success")
+		writeRPC(w, http.StatusOK, resp)
+		return
+	}
+
 	if h.lookup != nil && !h.lookup(address) {
+		// While an agent is offline its last known Task state can still be
+		// served from the durable store. This makes tasks/get survive restarts.
+		if stored, ok := h.storedTask(address, req); ok {
+			writeStoredResult(w, req.ID, stored)
+			return
+		}
 		a2ametrics.IncGatewayRequest(method, "agent_not_found")
 		writeRPC(w, http.StatusOK, task.NewSemanticErrorResponse(req.ID, task.AgentNotFound(address)))
 		return
@@ -187,6 +229,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				task.NewError(task.ErrorInternal, err.Error())))
 			return
 		}
+		// Mirror successful Task results into the durable store so the state
+		// and its artifacts survive a broker restart or an agent going offline.
+		h.mirrorTaskResult(address, resp.Result)
 	}
 	if resp != nil && resp.Error != nil {
 		a2ametrics.IncGatewayRequest(method, "rpc_error")
@@ -273,6 +318,72 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, event task.StreamEven
 	}
 	flusher.Flush()
 	return true
+}
+
+// taskResult extracts a Task from a JSON-RPC result. A2A SDKs return either a
+// bare Task or a wrapper object with a "task" field; both shapes are accepted.
+func taskResult(raw json.RawMessage) (*task.Task, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var direct task.Task
+	if err := json.Unmarshal(raw, &direct); err == nil && direct.ID != "" {
+		return &direct, true
+	}
+	var wrapper struct {
+		Task *task.Task `json:"task"`
+	}
+	if err := json.Unmarshal(raw, &wrapper); err == nil && wrapper.Task != nil && wrapper.Task.ID != "" {
+		return wrapper.Task, true
+	}
+	return nil, false
+}
+
+// mirrorTaskResult persists a successful Task result when a store is attached.
+// Storage failures are not surfaced to the caller: they never invalidate an
+// otherwise correct A2A response.
+func (h *Handler) mirrorTaskResult(address string, result json.RawMessage) {
+	if h == nil || h.store == nil {
+		return
+	}
+	if t, ok := taskResult(result); ok {
+		_ = h.store.Save(address, t)
+	}
+}
+
+// storedTask answers tasks/get from the durable store when the target agent is
+// offline. Only tasks/get (and its SDK alias) is served this way; mutating
+// methods must still reach a live agent.
+func (h *Handler) storedTask(address string, req *task.Request) (*task.Task, bool) {
+	if h == nil || h.store == nil || req == nil || task.NormalizeMethod(req.Method) != task.MethodTasksGet {
+		return nil, false
+	}
+	var params struct {
+		ID     string `json:"id"`
+		TaskID string `json:"taskId"`
+	}
+	if len(req.Params) == 0 || json.Unmarshal(req.Params, &params) != nil {
+		return nil, false
+	}
+	id := params.ID
+	if id == "" {
+		id = params.TaskID
+	}
+	if id == "" {
+		return nil, false
+	}
+	return h.store.Get(address, id)
+}
+
+func writeStoredResult(w http.ResponseWriter, id json.RawMessage, t *task.Task) {
+	resp, err := task.NewResponse(id, t)
+	if err != nil {
+		writeRPC(w, http.StatusInternalServerError,
+			task.NewSemanticErrorResponse(id, task.NewError(task.ErrorInternal, err.Error())))
+		return
+	}
+	a2ametrics.IncGatewayRequest(task.MethodTasksGet, "store_hit")
+	writeRPC(w, http.StatusOK, resp)
 }
 
 func writeRPC(w http.ResponseWriter, status int, resp *task.Response) {
