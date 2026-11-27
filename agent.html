@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent 能力 — GroveMQ A2A over MQTT</title>
+<meta name="description" content="GroveMQ 的 A2A over MQTT 能力：broker 中立的主题契约、Agent Card 发现、任务交换、Streaming、身份绑定、JWS/JWKS 安全与 A2A 1.0 标准兼容。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap nav">
+    <a href="index.html" class="brand"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="5" fill="#0b6bd3"/><circle cx="6" cy="7" r="3" fill="#24b6c9"/><circle cx="26" cy="7" r="3" fill="#24b6c9"/><circle cx="6" cy="25" r="3" fill="#24b6c9"/><circle cx="26" cy="25" r="3" fill="#24b6c9"/><path d="M16 11L8 9M16 11l8-2M11 16l-4 6M21 16l4 6" stroke="#0b6bd3" stroke-width="1.6"/></svg>GroveMQ</a>
+    <nav class="nav-links">
+      <a href="index.html" data-page="index.html">首页</a>
+      <a href="architecture.html" data-page="architecture.html">整体架构</a>
+      <a href="agent.html" data-page="agent.html">Agent 能力</a>
+      <a href="get-started.html" data-page="get-started.html">接入指南</a>
+      <a href="https://github.com/RiemannChow/GroveMQ" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+    <div class="nav-cta"><a href="get-started.html" class="btn btn-primary btn-sm">快速开始</a></div>
+    <button class="menu-toggle" aria-label="打开菜单"><span></span><span></span><span></span></button>
+  </div>
+</header>
+
+<section class="hero compact">
+  <div class="wrap hero-inner">
+    <div>
+      <div class="crumb"><a href="index.html">首页</a> / Agent 能力</div>
+      <span class="eyebrow">A2A over MQTT · broker neutral</span>
+      <h1>跨框架的 Agent <span class="hl">发现与任务交换</span></h1>
+      <p class="lead">一套 broker 中立的 A2A over MQTT 契约，兼容 EMQX A2A Registry 与 A2A 1.0 分层规范。主题名、MQTT 5 属性映射与载荷格式都是可评审、可互操作的开放约定。</p>
+      <div class="hero-actions">
+        <a href="#contract" class="btn btn-primary">查看主题契约</a>
+        <a href="https://github.com/RiemannChow/GroveMQ/blob/main/docs/design/A2A_OVER_MQTT_SPEC.md" target="_blank" rel="noopener" class="btn btn-outline-light">阅读规范原文 ↗</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="contract">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Topic contract</span>
+      <h2>主题命名空间</h2>
+      <p>所有 A2A 主题位于保留前缀 <code>$a2a/</code> 之下，必须使用显式 filter 订阅，不受普通 <code>#</code> / <code>+</code> 通配符影响。</p>
+    </div>
+    <div class="tbl-wrap reveal">
+      <table>
+        <thead><tr><th>用途</th><th>主题</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><b>Agent 发现</b></td><td><code>$a2a/v1/discovery/{org}/{unit}/{agent}</code></td><td><span class="desc">保留消息承载 Agent Card；QoS 1 + RETAIN；空载荷注销</span></td></tr>
+          <tr><td><b>任务请求</b></td><td><code>$a2a/v1/{org}/{unit}/{agent}/requests</code></td><td><span class="desc">QoS 1；携带 Response Topic 与 Correlation Data</span></td></tr>
+          <tr><td><b>状态流</b></td><td><code>$a2a/v1/{org}/{unit}/{agent}/tasks/{id}/status</code></td><td><span class="desc">进度与终态事件，供订阅而非轮询</span></td></tr>
+          <tr><td><b>工件流</b></td><td><code>$a2a/v1/{org}/{unit}/{agent}/tasks/{id}/artifacts</code></td><td><span class="desc">Artifact 形式的任务输出，与 Message 分离</span></td></tr>
+          <tr><td><b>收件箱</b></td><td><code>$a2a/v1/{org}/{unit}/{agent}/inbox</code></td><td><span class="desc">可选的通用响应主题</span></td></tr>
+          <tr><td><b>工作池</b></td><td><code>$share/{pool}/$a2a/v1/{org}/{unit}/{agent}/requests</code></td><td><span class="desc">多个 worker 共享订阅，轮询分发，每条恰好一次</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="notice reveal" style="margin-top:22px">注册时，完整三段地址 <code>{org}/{unit}/{agent}</code> 必须等于发布客户端的 Client ID，不一致会被 PUBACK / PUBREC 拒绝（原因码 0x87）。</div>
+  </div>
+</section>
+
+<section class="section soft">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">MQTT 5 mapping</span>
+      <h2>用 MQTT 5 原生属性承载协议语义</h2>
+      <p>不发明新传输协议，只把 A2A 概念映射到 MQTT 5 已有字段。</p>
+    </div>
+    <div class="tbl-wrap reveal">
+      <table>
+        <thead><tr><th>A2A 概念</th><th>MQTT 5 载体</th></tr></thead>
+        <tbody>
+          <tr><td>请求 / 响应配对</td><td><code>Response Topic</code> + <code>Correlation Data</code></td></tr>
+          <tr><td>Agent 可用性</td><td><code>a2a-status</code> = online / offline / lwt</td></tr>
+          <tr><td>状态来源</td><td><code>a2a-status-source</code> = broker / agent / lwt</td></tr>
+          <tr><td>协议版本</td><td><code>A2A-Version</code> = 1.0</td></tr>
+          <tr><td>扩展声明</td><td><code>A2A-Extensions</code>（逗号分隔 URI）</td></tr>
+          <tr><td>内容类型</td><td><code>Content Type</code> = application/a2a+json</td></tr>
+          <tr><td>语义错误</td><td>PUBACK / PUBREC 原因码 + <code>a2a-error</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Task exchange</span>
+      <h2>一次 message/send 的完整时序</h2>
+      <p>请求走 QoS 1，状态与工件分流推送，终态自动关流。</p>
+    </div>
+    <div class="code reveal" style="max-width:1000px;margin:0 auto">
+      <div class="top"><span class="name">sequence · message/send</span><span class="copy" style="cursor:pointer;color:#7fc4ff">复制</span></div>
+      <pre><span class="c">Client        Gateway       Broker        Agent</span>
+  │              │             │             │
+  │─ POST ──────▶│             │             │  <span class="n">1</span> Bearer token
+  │              │─ PUBLISH ──▶│             │  <span class="n">2</span> /requests, QoS 1
+  │              │◀─ PUBACK ───│             │  <span class="n">3</span> 语义错误在此确认
+  │              │             │─ dispatch ─▶│  <span class="n">4</span> $share 轮询
+  │              │             │◀ status=WORKING
+  │◀─ SSE ───────│◀────────────│             │  <span class="n">5</span> 状态流
+  │              │             │◀ artifacts  │  <span class="n">6</span> Artifact 主题
+  │◀─ SSE ───────│◀────────────│             │  <span class="n">7</span> 工件流
+  │              │             │◀ completed  │  <span class="n">8</span> 终态
+  │◀─ close ─────│             │             │  <span class="n">9</span> 自动关闭 SSE</pre>
+    </div>
+  </div>
+</section>
+
+<section class="section soft">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Agent state</span>
+      <h2>在线状态：三个值，三种来源</h2>
+      <p>显式断开、异常断开与 Broker 侧决策被明确区分，避免「已注册即在线」的误判。</p>
+    </div>
+    <div class="cards">
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/></svg></div><h3>offline / broker</h3><p>已注册但当前不在线；Card 仍作为保留消息存在，可被发现。</p><span class="tag">source = broker</span></div>
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M5 12l5 5L20 7"/></svg></div><h3>online / agent</h3><p>客户端连接建立且 Agent Card 校验通过后进入在线状态。</p><span class="tag">source = agent</span></div>
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l9 16H3l9-16z"/><path d="M12 9v5M12 17h.01"/></svg></div><h3>lwt / lwt</h3><p>异常断开由 MQTT 遗嘱消息标记，与主动离线区分，便于上层调度。</p><span class="tag">source = lwt</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Security</span>
+      <h2>身份、签名与零回归</h2>
+      <p>身份绑定在连接层，Card 签名可选校验，所有 A2A 特性默认关闭。</p>
+    </div>
+    <div class="cards">
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg></div><h3>请求身份绑定</h3><p>三档策略 off / caller / agent_or_gateway；拒绝时 PUBACK 携带 UnauthorizedError。</p><span class="tag">a2a_request_auth</span></div>
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16v12H4z"/><path d="M8 7V5a4 4 0 018 0v2M12 12v3"/></svg></div><h3>Card JWS / JWKS</h3><p>支持 RS256 / ES256，JKU allowlist；签名覆盖规范化 Card，保留未知扩展字段。</p><span class="tag">RS256 / ES256</span></div>
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3"/></svg></div><h3>默认零回归</h3><p>关闭 A2A 时普通 MQTT 行为与性能不变；Registry 禁用态在所有 Hook 上为 no-op。</p><span class="tag">opt-in by default</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section soft">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">A2A 1.0 compatibility</span>
+      <h2>标准方法，逐项对齐</h2>
+      <p>标准 A2A SDK 只需修改端点 URL 即可接入 GroveMQ Agent。</p>
+    </div>
+    <div class="tbl-wrap reveal">
+      <table>
+        <thead><tr><th>A2A 1.0 方法 / 能力</th><th>GroveMQ 映射</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td><code>message/send</code> · sendMessage</td><td><span class="desc">PUBLISH /requests（QoS 1）+ PUBACK</span></td><td><span class="badge done">已实现</span></td></tr>
+          <tr><td><code>message/stream</code></td><td><span class="desc">SSE + status / artifacts 主题，终态关流</span></td><td><span class="badge done">已实现</span></td></tr>
+          <tr><td><code>tasks/get</code></td><td><span class="desc">网关转发 + Task Store 离线回退</span></td><td><span class="badge done">已实现</span></td></tr>
+          <tr><td>Push Config（四方法）</td><td><span class="desc">PushStore 本地应答，按 capability 门控</span></td><td><span class="badge done">已实现</span></td></tr>
+          <tr><td><code>GetExtendedAgentCard</code></td><td><span class="desc">x-extended-card 扩展，签名覆盖</span></td><td><span class="badge done">已实现</span></td></tr>
+          <tr><td>Agent Card JWS / JWKS</td><td><span class="desc">RS256 + ES256，JKU allowlist</span></td><td><span class="badge done">已实现</span></td></tr>
+          <tr><td>共享工作池</td><td><span class="desc">$share/pool/... 轮询分发，恰好一次</span></td><td><span class="badge done">已实现</span></td></tr>
+          <tr><td>protocolBinding = A2A-over-MQTT</td><td><span class="desc">社区提案 Discussion #2523 讨论中</span></td><td><span class="badge prop">提案中</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">HTTP gateway</span>
+      <h2>让标准 SDK 只改一个端点</h2>
+      <p>网关暴露 <code>POST /a2a/v1/{org}/{unit}/{agent}</code>，把 JSON-RPC 请求桥接到 MQTT。</p>
+    </div>
+    <div class="code reveal" style="max-width:1000px;margin:0 auto">
+      <div class="top"><span class="name">curl · message/send via gateway</span><span class="copy" style="cursor:pointer;color:#7fc4ff">复制</span></div>
+      <pre><span class="p">$</span> curl -X POST <span class="s">http://localhost:18083/a2a/v1/acme/fleet/router-agent</span> \
+  -H <span class="s">"Authorization: Bearer my-secret-token"</span> \
+  -H <span class="s">"Content-Type: application/a2a+json"</span> \
+  -d <span class="s">'{
+    "jsonrpc":"2.0", "id":1,
+    "method":"message/send",
+    "params":{ "message":{ "role":"user", "parts":[{"kind":"text","text":"检查路由状态"}] } }
+  }'</span>
+
+<span class="c"># 网关把请求映射到 $a2a/v1/.../requests，</span>
+<span class="c"># 并用 Response Topic + Correlation Data 配对响应。</span></pre>
+    </div>
+    <div class="notice reveal" style="margin-top:24px;max-width:1000px;margin-left:auto;margin-right:auto">生产环境请在 <code>a2a_gateway.tokens</code> 配置 Bearer token；principal 会升格为 MQTT CONNECT 用户名，与请求身份绑定策略联动。</div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="wrap">
+    <h2>把 Agent 接入 GroveMQ</h2>
+    <p>从启用 Registry 到发布第一张 Agent Card，接入指南里有逐步命令与配置示例。</p>
+    <div class="hero-actions"><a href="get-started.html" class="btn btn-primary">阅读接入指南</a><a href="#contract" class="btn btn-outline-light">回看主题契约</a></div>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="wrap foot-grid">
+    <div class="foot-brand"><a href="index.html" class="brand" style="color:#fff">GroveMQ</a><p>面向 AI、IoT、IIoT 与车联网的 Go 语言 MQTT Broker。</p></div>
+    <div><h4>产品</h4><a href="index.html">能力概览</a><a href="architecture.html">整体架构</a><a href="agent.html">Agent 能力</a></div>
+    <div><h4>资源</h4><a href="get-started.html">接入指南</a><a href="https://github.com/RiemannChow/GroveMQ/blob/main/docs/design/A2A_OVER_MQTT_SPEC.md" target="_blank" rel="noopener">A2A 规范 ↗</a></div>
+    <div><h4>社区</h4><a href="https://github.com/RiemannChow/GroveMQ" target="_blank" rel="noopener">GitHub ↗</a><a href="https://github.com/a2aproject/A2A/discussions/2523" target="_blank" rel="noopener">A2A 提案 ↗</a></div>
+  </div>
+  <div class="wrap foot-bottom"><span>© 2026 GroveMQ · Apache License 2.0</span><span>默认配置含演示凭据，上线前请替换密码并审阅 auth / ACL / TLS。</span></div>
+</footer>
+<script src="assets/main.js"></script>
+</body>
+</html>

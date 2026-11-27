@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>整体架构 — GroveMQ</title>
+<meta name="description" content="GroveMQ 整体架构：Actor 并发核心、Broker 逻辑、gRPC 集群、Kubernetes 发现、持久化与 A2A 适配层，以及集群拓扑与数据流。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap nav">
+    <a href="index.html" class="brand"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="5" fill="#0b6bd3"/><circle cx="6" cy="7" r="3" fill="#24b6c9"/><circle cx="26" cy="7" r="3" fill="#24b6c9"/><circle cx="6" cy="25" r="3" fill="#24b6c9"/><circle cx="26" cy="25" r="3" fill="#24b6c9"/><path d="M16 11L8 9M16 11l8-2M11 16l-4 6M21 16l4 6" stroke="#0b6bd3" stroke-width="1.6"/></svg>GroveMQ</a>
+    <nav class="nav-links">
+      <a href="index.html" data-page="index.html">首页</a>
+      <a href="architecture.html" data-page="architecture.html">整体架构</a>
+      <a href="agent.html" data-page="agent.html">Agent 能力</a>
+      <a href="get-started.html" data-page="get-started.html">接入指南</a>
+      <a href="https://github.com/RiemannChow/GroveMQ" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+    <div class="nav-cta"><a href="get-started.html" class="btn btn-primary btn-sm">快速开始</a></div>
+    <button class="menu-toggle" aria-label="打开菜单"><span></span><span></span><span></span></button>
+  </div>
+</header>
+
+<section class="hero compact">
+  <div class="wrap hero-inner">
+    <div>
+      <div class="crumb"><a href="index.html">首页</a> / 整体架构</div>
+      <span class="eyebrow">Architecture</span>
+      <h1>轻量 Actor 内核，<span class="hl">分层可插拔</span></h1>
+      <p class="lead">从单机到分布式集群，从消息路由到 Agent 协作——GroveMQ 用一个清晰的模块边界承载所有能力。</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Layered design</span>
+      <h2>五层架构，A2A 是可选适配层</h2>
+      <p>底层 Broker 不感知 Agent 语义；A2A 发现、任务、身份、流式与存储都作为独立适配组件挂载。</p>
+    </div>
+    <div class="stack reveal">
+      <div class="layer"><div><div class="l-num">CALLERS</div><div class="l-title">调用方</div></div><div class="l-desc">A2A SDK · HTTP JSON-RPC · raw MQTT · mosquitto / MQTTX</div></div>
+      <div class="stack-arrow">↓</div>
+      <div class="layer"><div><div class="l-num">01 · ENTRY</div><div class="l-title">接入与网关层</div></div><div class="l-desc">MQTT :1883 · WebSocket（可选）· Dashboard / Admin API :18083 · HTTP A2A 网关</div></div>
+      <div class="stack-arrow">↓</div>
+      <div class="layer accent"><div><div class="l-num">02 · A2A ADAPTER</div><div class="l-title">A2A 适配层（可选）</div></div><div class="l-desc">Registry 索引 · 身份绑定 Hook · Task Hook · StreamHub · Task Store · PushStore · 兼容层</div></div>
+      <div class="stack-arrow">↓</div>
+      <div class="layer"><div><div class="l-num">03 · CONTRACT</div><div class="l-title">契约层</div></div><div class="l-desc">$a2a/v1/... 主题族 · MQTT 5 Response Topic / Correlation Data / User Properties</div></div>
+      <div class="stack-arrow">↓</div>
+      <div class="layer"><div><div class="l-num">04 · BROKER CORE</div><div class="l-title">Broker 内核</div></div><div class="l-desc">会话 Actor · 主题路由 · retained · QoS · ACL · LWT · $share · gRPC 集群 · Bolt 持久化</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="section soft">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Modules</span>
+      <h2>代码模块地图</h2>
+      <p>每个包职责单一，便于替换与独立测试。</p>
+    </div>
+    <div class="tbl-wrap reveal">
+      <table>
+        <thead><tr><th>包</th><th>职责</th></tr></thead>
+        <tbody>
+          <tr><td><code>pkg/actor</code></td><td><span class="desc">轻量、受 OTP 启发的 Actor 并发模型</span></td></tr>
+          <tr><td><code>pkg/broker</code></td><td><span class="desc">Broker 核心：连接处理与消息流编排</span></td></tr>
+          <tr><td><code>pkg/cluster</code></td><td><span class="desc">gRPC 服务端 / 客户端、集群状态管理器</span></td></tr>
+          <tr><td><code>pkg/discovery</code></td><td><span class="desc">服务发现，含 Kubernetes headless service 实现</span></td></tr>
+          <tr><td><code>pkg/protocol/mqtt</code></td><td><span class="desc">MQTT 报文解析与编码（v3.1.1 / v5.0）</span></td></tr>
+          <tr><td><code>pkg/session</code></td><td><span class="desc">基于 Actor 的单客户端会话管理</span></td></tr>
+          <tr><td><code>pkg/topic</code></td><td><span class="desc">线程安全的订阅存储与主题路由</span></td></tr>
+          <tr><td><code>pkg/storage</code></td><td><span class="desc">通用键值存储接口与多种后端实现</span></td></tr>
+          <tr><td><code>pkg/supervisor</code></td><td><span class="desc">OTP 风格 Actor 生命周期监管与容错</span></td></tr>
+          <tr><td><code>pkg/metrics</code></td><td><span class="desc">Prometheus 指标定义与暴露</span></td></tr>
+          <tr><td><code>pkg/a2a/*</code></td><td><span class="desc">A2A schema、Registry、task 状态机、gateway、metrics</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Clustering</span>
+      <h2>分布式集群与拓扑</h2>
+      <p>节点通过 gRPC 交换路由与状态；在 Kubernetes 中用 headless service 自动组队。</p>
+    </div>
+    <div class="topo reveal">
+      <div class="node"><b>Node 1</b><small>MQTT 接入点</small><div class="ports">1883 · 8081 · 8082 · 18083</div></div>
+      <div class="node bus"><b>gRPC 集群总线</b><small>跨节点路由 / 状态同步 / 管理</small><div class="ports">PEER_NODES · headless service</div></div>
+      <div class="node"><b>Node 2 / 3</b><small>横向扩展节点</small><div class="ports">1884/1885 · 8083/8085</div></div>
+    </div>
+    <p class="topo-note reveal">共享订阅负载均衡与接入层重定向均为可选项，默认关闭，不引入额外行为。</p>
+
+    <div class="cards" style="margin-top:38px">
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="2" fill="#fff"/><circle cx="16" cy="12" r="2" fill="#fff"/></svg></div><h3>接入层负载均衡</h3><p>access_lb 支持 off / l4 / redirect / both；MQTT 5 客户端可收到 CONNACK 0x9C 重定向到另一节点。</p><span class="tag">GROVEMQ_ACCESS_LB</span></div>
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg></div><h3>跨节点共享订阅</h3><p>shared_route_policy 可选 fanout（基线）或 single（跨节点 $share 单目标投递）。</p><span class="tag">shared_route_policy</span></div>
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg></div><h3>持久化与复制</h3><p>设置 GROVEMQ_DATA_DIR 后，会话与 retained 消息落盘，并启用集群状态复制。</p><span class="tag">GROVEMQ_DATA_DIR</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section soft">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Ports &amp; hot reload</span>
+      <h2>端口与运维</h2>
+    </div>
+    <div class="split">
+      <div class="tbl-wrap reveal">
+        <table>
+          <thead><tr><th>端口</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>1883</code></td><td><span class="desc">MQTT 连接</span></td></tr>
+            <tr><td><code>8883</code></td><td><span class="desc">MQTT over TLS</span></td></tr>
+            <tr><td><code>8081</code></td><td><span class="desc">gRPC 集群通信（内网）</span></td></tr>
+            <tr><td><code>8082</code></td><td><span class="desc">Prometheus 指标 /metrics</span></td></tr>
+            <tr><td><code>18083</code></td><td><span class="desc">Dashboard 与 Admin API</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="reveal">
+        <h2 style="font-size:26px;letter-spacing:-.6px;margin:0 0 14px">配置热重载，无需重启</h2>
+        <p>向进程发送 <code>SIGHUP</code> 或调用 Admin API <code>POST /api/v5/reload</code>，即可重新加载 auth、ACL 与 hooks，不中断在线连接。监听端口只在启动时绑定，修改端口仍需重启。</p>
+        <div class="notice" style="margin-top:20px">A2A Registry、Gateway 与请求身份绑定属于启动期配置，修改后需要重启 Broker。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="wrap">
+    <h2>想看 Agent 能力如何落在这套架构上？</h2>
+    <p>主题契约、任务交换、流式事件、身份绑定与标准兼容，都在 Agent 能力页逐一拆解。</p>
+    <div class="hero-actions"><a href="agent.html" class="btn btn-primary">查看 Agent 能力</a><a href="get-started.html" class="btn btn-outline-light">接入指南</a></div>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="wrap foot-grid">
+    <div class="foot-brand"><a href="index.html" class="brand" style="color:#fff">GroveMQ</a><p>面向 AI、IoT、IIoT 与车联网的 Go 语言 MQTT Broker。</p></div>
+    <div><h4>产品</h4><a href="index.html">能力概览</a><a href="architecture.html">整体架构</a><a href="agent.html">Agent 能力</a></div>
+    <div><h4>资源</h4><a href="get-started.html">接入指南</a><a href="https://github.com/RiemannChow/GroveMQ/tree/main/docs" target="_blank" rel="noopener">项目文档 ↗</a></div>
+    <div><h4>社区</h4><a href="https://github.com/RiemannChow/GroveMQ" target="_blank" rel="noopener">GitHub ↗</a><a href="https://github.com/a2aproject/A2A/discussions/2523" target="_blank" rel="noopener">A2A 提案 ↗</a></div>
+  </div>
+  <div class="wrap foot-bottom"><span>© 2026 GroveMQ · Apache License 2.0</span><span>默认配置含演示凭据，上线前请替换密码并审阅 auth / ACL / TLS。</span></div>
+</footer>
+<script src="assets/main.js"></script>
+</body>
+</html>

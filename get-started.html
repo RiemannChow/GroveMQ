@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>接入指南 — GroveMQ</title>
+<meta name="description" content="GroveMQ 接入指南：本地构建运行、Docker / Kubernetes 部署、启用 A2A Registry 与网关、发布 Agent Card、标准 SDK 接入。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap nav">
+    <a href="index.html" class="brand"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="5" fill="#0b6bd3"/><circle cx="6" cy="7" r="3" fill="#24b6c9"/><circle cx="26" cy="7" r="3" fill="#24b6c9"/><circle cx="6" cy="25" r="3" fill="#24b6c9"/><circle cx="26" cy="25" r="3" fill="#24b6c9"/><path d="M16 11L8 9M16 11l8-2M11 16l-4 6M21 16l4 6" stroke="#0b6bd3" stroke-width="1.6"/></svg>GroveMQ</a>
+    <nav class="nav-links">
+      <a href="index.html" data-page="index.html">首页</a>
+      <a href="architecture.html" data-page="architecture.html">整体架构</a>
+      <a href="agent.html" data-page="agent.html">Agent 能力</a>
+      <a href="get-started.html" data-page="get-started.html">接入指南</a>
+      <a href="https://github.com/RiemannChow/GroveMQ" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+    <div class="nav-cta"><a href="get-started.html" class="btn btn-primary btn-sm">快速开始</a></div>
+    <button class="menu-toggle" aria-label="打开菜单"><span></span><span></span><span></span></button>
+  </div>
+</header>
+
+<section class="hero compact">
+  <div class="wrap hero-inner">
+    <div>
+      <div class="crumb"><a href="index.html">首页</a> / 接入指南</div>
+      <span class="eyebrow">Get started</span>
+      <h1>几分钟跑起 <span class="hl">GroveMQ</span></h1>
+      <p class="lead">从单机 Broker 到启用 A2A 能力，再到用标准 A2A SDK 调用 Agent——按场景选择下面的接入路径。</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Quick start</span>
+      <h2>本地构建与运行</h2>
+      <p>前置条件：Go 1.25+，以及任意 MQTT 客户端（MQTTX 或 mosquitto-clients）。</p>
+    </div>
+    <div class="steps">
+      <div class="step reveal"><div class="num">1</div><div><h3>克隆仓库</h3><p>获取最新源码。</p><div class="code"><div class="top"><span class="name">shell</span><span class="copy" style="cursor:pointer;color:#7fc4ff">复制</span></div><pre><span class="p">$</span> git clone https://github.com/RiemannChow/GroveMQ.git
+<span class="p">$</span> cd GroveMQ</pre></div></div></div>
+      <div class="step reveal"><div class="num">2</div><div><h3>构建</h3><p>在仓库根目录生成可执行文件。</p><div class="code"><div class="top"><span class="name">shell</span><span class="copy" style="cursor:pointer;color:#7fc4ff">复制</span></div><pre><span class="p">$</span> go build ./cmd/grovemq</pre></div></div></div>
+      <div class="step reveal"><div class="num">3</div><div><h3>启动 Broker</h3><p>从仓库根目录运行，以便读取 config.yaml。</p><div class="code"><div class="top"><span class="name">shell</span><span class="copy" style="cursor:pointer;color:#7fc4ff">复制</span></div><pre><span class="p">$</span> ./grovemq
+<span class="c"># 监听：MQTT :1883 · gRPC :8081 · Metrics :8082 · Dashboard :18083</span></pre></div></div></div>
+      <div class="step reveal"><div class="num">4</div><div><h3>连接测试</h3><p>任意标准 MQTT 客户端即可接入。</p><div class="code"><div class="top"><span class="name">shell</span><span class="copy" style="cursor:pointer;color:#7fc4ff">复制</span></div><pre><span class="p">$</span> mosquitto_sub -h localhost -p 1883 -t <span class="s">"test/topic"</span>
+<span class="p">$</span> mosquitto_pub -h localhost -p 1883 -t <span class="s">"test/topic"</span> -m <span class="s">"Hello GroveMQ"</span></pre></div></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="section soft">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Deploy</span>
+      <h2>集群、Docker 与 Kubernetes</h2>
+    </div>
+    <div class="cards">
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 8h8v8H8z"/></svg></div><h3>本地三节点集群</h3><p>脚本构建并启动 1883 / 1884 / 1885 三个节点，附集群测试工具。</p><span class="tag">start-cluster.sh</span></div>
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 4-8 4-8-4 8-4zM4 12l8 4 8-4M4 16l8 4 8-4"/></svg></div><h3>Docker Compose</h3><p>docker-compose-cluster.yaml 一键拉起集群；单节点也可用 docker run 映射端口。</p><span class="tag">compose v2</span></div>
+      <div class="card reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l9 5v8l-9 5-9-5V8l9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg></div><h3>Kubernetes</h3><p>提供 StatefulSet 与 headless service 清单，节点自动发现；持久化用每节点独立卷。</p><span class="tag">k8s/</span></div>
+    </div>
+    <div class="notice reveal" style="margin-top:24px">持久化需要设置 <code>GROVEMQ_DATA_DIR</code>：未设置时所有状态只在内存，重启即丢失；设置后会话、retained 消息与 A2A Task 记录均落盘。</div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Enable A2A</span>
+      <h2>启用 Agent 能力</h2>
+      <p>A2A 能力默认关闭。在 config.yaml 中按需开启 Registry、网关与身份绑定。</p>
+    </div>
+    <div class="code reveal" style="max-width:1000px;margin:0 auto">
+      <div class="top"><span class="name">config.yaml · A2A section</span><span class="copy" style="cursor:pointer;color:#7fc4ff">复制</span></div>
+      <pre>broker:
+  <span class="k">a2a_registry</span>:
+    <span class="k">enabled</span>: <span class="s">true</span>
+    <span class="k">validate_schema</span>: <span class="s">strict</span>   <span class="c"># strict (A2A 1.0) | loose (EMQX 风格)</span>
+    <span class="k">binding_url</span>: <span class="s">"mqtt://localhost:1883"</span>
+    <span class="k">require_security_metadata</span>: <span class="s">false</span>
+    <span class="k">allowed_jku_prefixes</span>: []
+
+  <span class="k">a2a_gateway</span>:
+    <span class="k">enabled</span>: <span class="s">true</span>
+    <span class="k">timeout_seconds</span>: <span class="s">5</span>
+    <span class="k">tokens</span>: {<span class="s">"my-secret-token"</span>: <span class="s">"sdk-service"</span>}  <span class="c"># Bearer -&gt; principal</span>
+
+  <span class="k">a2a_request_auth</span>:
+    <span class="k">policy</span>: <span class="s">agent_or_gateway</span>  <span class="c"># off | caller | agent_or_gateway</span>
+    <span class="k">allowed_clients</span>: [<span class="s">"grovemq-gateway"</span>]
+    <span class="k">allowed_usernames</span>: [<span class="s">"sdk-service"</span>]</pre>
+    </div>
+    <div class="notice warn reveal" style="margin-top:24px;max-width:1000px;margin-left:auto;margin-right:auto">A2A 相关配置是启动期配置，修改后需要重启 Broker；auth / ACL / hooks 支持热重载。</div>
+  </div>
+</section>
+
+<section class="section soft">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Publish a card</span>
+      <h2>发布第一张 Agent Card</h2>
+      <p>把符合 A2A 1.0 的 Card JSON 发布到保留主题，即完成注册与发现。</p>
+    </div>
+    <div class="code reveal" style="max-width:1000px;margin:0 auto">
+      <div class="top"><span class="name">shell · register agent</span><span class="copy" style="cursor:pointer;color:#7fc4ff">复制</span></div>
+      <pre><span class="p">$</span> mosquitto_pub -h localhost -p 1883 \
+    -t <span class="s">'$a2a/v1/discovery/acme/fleet/router-agent'</span> \
+    -f agent-card.json \
+    -q 1 -r
+
+<span class="c"># Client ID 必须等于三段地址 acme/fleet/router-agent</span>
+<span class="c"># 通过 Admin API 查看注册结果：</span>
+<span class="p">$</span> curl http://localhost:18083/api/v5/a2a/agents</pre>
+    </div>
+    <p class="topo-note reveal" style="text-align:left;max-width:1000px;margin:20px auto 0">注销时向同一主题发布空载荷并设置 RETAIN=1；Registry 启用后还会从 retained Card 在启动时自动重建索引。</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Connect paths</span>
+      <h2>四种接入方式</h2>
+    </div>
+    <div class="tbl-wrap reveal">
+      <table>
+        <thead><tr><th>接入方</th><th>入口</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><b>MQTT 设备 / 客户端</b></td><td><code>mqtt://host:1883</code></td><td><span class="desc">标准 MQTT v3.1.1 / v5.0 客户端</span></td></tr>
+          <tr><td><b>A2A SDK</b></td><td><code>http://host:18083/a2a/v1/&lt;address&gt;</code></td><td><span class="desc">仅改端点 URL，Bearer token 鉴权</span></td></tr>
+          <tr><td><b>Agent Worker</b></td><td><code>$a2a/v1/.../requests</code></td><td><span class="desc">原生订阅请求主题，或用 $share 组成工作池</span></td></tr>
+          <tr><td><b>运维 / Dashboard</b></td><td><code>http://host:18083</code></td><td><span class="desc">Admin API、A2A agents / stats、配置热重载</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="notice reveal" style="margin-top:24px">生产部署前请替换 config.yaml 中的演示凭据（如 admin / admin123），并按网络暴露面配置 auth、ACL 与 TLS。</div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="wrap">
+    <h2>准备好让你的 Agent 上线了吗？</h2>
+    <p>查看完整 A2A 契约与实现状态，或直接在 GitHub 上阅读部署与配置文档。</p>
+    <div class="hero-actions"><a href="agent.html" class="btn btn-primary">了解 Agent 能力</a><a href="https://github.com/RiemannChow/GroveMQ/tree/main/docs/guides" target="_blank" rel="noopener" class="btn btn-outline-light">部署与配置文档 ↗</a></div>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="wrap foot-grid">
+    <div class="foot-brand"><a href="index.html" class="brand" style="color:#fff">GroveMQ</a><p>面向 AI、IoT、IIoT 与车联网的 Go 语言 MQTT Broker。</p></div>
+    <div><h4>产品</h4><a href="index.html">能力概览</a><a href="architecture.html">整体架构</a><a href="agent.html">Agent 能力</a></div>
+    <div><h4>资源</h4><a href="get-started.html">接入指南</a><a href="https://github.com/RiemannChow/GroveMQ/tree/main/docs/guides" target="_blank" rel="noopener">部署与配置 ↗</a></div>
+    <div><h4>社区</h4><a href="https://github.com/RiemannChow/GroveMQ" target="_blank" rel="noopener">GitHub ↗</a><a href="https://github.com/a2aproject/A2A/discussions/2523" target="_blank" rel="noopener">A2A 提案 ↗</a></div>
+  </div>
+  <div class="wrap foot-bottom"><span>© 2026 GroveMQ · Apache License 2.0</span><span>默认配置含演示凭据，上线前请替换密码并审阅 auth / ACL / TLS。</span></div>
+</footer>
+<script src="assets/main.js"></script>
+</body>
+</html>
