@@ -9,6 +9,7 @@ Welcome to the GroveMQ documentation. This directory contains all project docume
 ```
 docs/
 ├── chaos/              # Chaos engineering tooling index
+├── design/             # Design specs (A2A over MQTT contract, load balancing)
 ├── guides/             # User and operation guides
 ├── testing/            # Testing documentation
 ├── reports/            # Test reports and status
