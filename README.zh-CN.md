@@ -21,6 +21,7 @@
 </p>
 
 <p align="center">
+  <a href="https://grovemq.riemann-chow.cn">官网</a> |
   <a href="docs/README.md">文档中心</a> |
   <a href="docs/guides/CONFIG_GUIDE.md">配置指南</a> |
   <a href="docs/guides/DEPLOYMENT.md">部署指南</a> |
@@ -41,6 +42,7 @@ GroveMQ 是一款面向 AI、IoT、工业物联网（IIoT）与车联网场景�
 *   **Kubernetes 原生服务发现**：通过 Headless Service 自动发现 Kubernetes 环境中的对等节点，实现集群自动组建。
 *   **高性能节点间通信**：使用 gRPC 完成路由、状态同步与集群管理，通信高效且类型安全。
 *   **Prometheus 指标**：以 Prometheus 格式暴露连接数、Actor 重启次数等关键运维指标，便于监控告警。
+*   **A2A over MQTT（可选启用）**：面向跨框架 Agent 发现与任务交换的 broker 中立绑定。通过 `$a2a/v1/discovery/...` 保留主题发布 Agent Card，用 MQTT 5 属性承载协议语义，请求/状态/工件主题分离；提供兼容标准 A2A SDK 的 HTTP JSON-RPC 网关、流式事件、JWS/JWKS 验签、身份绑定、任务持久化与共享订阅工作池。默认关闭，零回归。详见 [A2A_OVER_MQTT_SPEC.md](docs/design/A2A_OVER_MQTT_SPEC.md) 与[官网 Agent 能力页](https://grovemq.riemann-chow.cn/agent.html)。
 
 ## 安全提示
 
