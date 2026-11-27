@@ -21,6 +21,7 @@
 </p>
 
 <p align="center">
+  <a href="https://grovemq.riemann-chow.cn">Website</a> |
   <a href="docs/README.md">Documentation</a> |
   <a href="docs/guides/CONFIG_GUIDE.md">Configuration</a> |
   <a href="docs/guides/DEPLOYMENT.md">Deployment</a> |
@@ -41,6 +42,7 @@ GroveMQ is an MQTT broker built for unmatched scalability and reliability across
 *   **Kubernetes-Native Discovery**: Automatically discovers peer nodes within a Kubernetes environment using a headless service, enabling seamless cluster formation.
 *   **High-Performance Communication**: Utilizes gRPC for efficient and strongly-typed inter-node communication for routing, state synchronization, and cluster management.
 *   **Prometheus Metrics**: Exposes key operational metrics (e.g., connection counts, actor restarts) in a Prometheus-compatible format for easy monitoring.
+*   **A2A over MQTT (opt-in)**: A broker-neutral binding for cross-framework Agent discovery and task exchange. Retained Agent Cards on `$a2a/v1/discovery/...`, MQTT 5 properties for protocol semantics, request/status/artifact topic separation, HTTP JSON-RPC gateway for standard A2A SDKs, streaming, JWS/JWKS verification, identity binding, durable tasks and shared-subscription work pools. Disabled by default with zero regression. See [A2A_OVER_MQTT_SPEC.md](docs/design/A2A_OVER_MQTT_SPEC.md) and the [Agent capabilities page](https://grovemq.riemann-chow.cn/agent.html).
 
 ## Security note
 
